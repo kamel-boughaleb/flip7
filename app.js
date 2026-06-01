@@ -787,12 +787,15 @@ function renderGame(id) {
 
   app.appendChild(buildSummary(game, st, w));
 
-  const actions = el(`
-    <div class="new-scores-bar">
-      <button class="btn btn-primary btn-big" id="newScores">➕ Nouveaux scores</button>
-    </div>`);
-  actions.querySelector("#newScores").addEventListener("click", () => go("entry", { id: game.id }));
-  app.appendChild(actions);
+  // Hide score entry once the game is won.
+  if (!w) {
+    const actions = el(`
+      <div class="new-scores-bar">
+        <button class="btn btn-primary btn-big" id="newScores">➕ Nouveaux scores</button>
+      </div>`);
+    actions.querySelector("#newScores").addEventListener("click", () => go("entry", { id: game.id }));
+    app.appendChild(actions);
+  }
 
   const detailsWrap = el(`<div class="rules-link-wrap"><button class="link-btn" id="showDetails">📋 Voir les détails</button></div>`);
   detailsWrap.querySelector("#showDetails").addEventListener("click", () => go("details", { id: game.id }));
@@ -873,23 +876,11 @@ function buildTable(game, rankMap, w) {
     const won = w && w.id === p.id;
     const tr = el(`<tr class="${won ? "winner-row" : ""}"><td class="player-name">${esc(p.name)}</td></tr>`);
 
-    game.rounds.forEach((r, ri) => {
+    game.rounds.forEach((r) => {
       const cell = r.scores[p.id] || { points: 0, flip7: false, bust: false };
-      const td = el(`<td></td>`);
-      const tags = `${cell.flip7 ? '<span class="flip7-tag">+15</span>' : ""}`;
-      td.innerHTML = `
-        <input type="number" class="cell-input" value="${cell.bust ? 0 : (Number(cell.points) || 0)}" ${cell.bust ? "disabled" : ""} />${tags}`;
-      const input = td.querySelector("input");
-      input.addEventListener("change", (e) => {
-        const g = getGame(game.id);
-        const beforeWinnerId = (winner(g) || {}).id || null;
-        const c = g.rounds[ri].scores[p.id] || { points: 0, flip7: false, bust: false };
-        c.points = Number(e.target.value) || 0;
-        g.rounds[ri].scores[p.id] = c;
-        upsertGame(g);
-        renderDetails(game.id);
-        celebrateIfNewWinner(beforeWinnerId, g);
-      });
+      const pts = cell.bust ? 0 : (Number(cell.points) || 0);
+      const tags = cell.flip7 ? '<span class="flip7-tag">+15</span>' : "";
+      const td = el(`<td><span class="cell-value${cell.bust ? " bust" : ""}">${pts}</span>${tags}</td>`);
       tr.appendChild(td);
     });
 
@@ -1005,6 +996,7 @@ function buildRoundEntry(game) {
 function renderEntry(id) {
   const game = getGame(id);
   if (!game) return go("home");
+  if (winner(game)) return go("game", { id }); // game is over — no new scores
   app.innerHTML = "";
 
   const head = el(`

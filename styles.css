@@ -487,12 +487,14 @@ table.score .player-name {
 table.score tbody tr.winner-row td { background: var(--gold-light); }
 table.score tbody tr.winner-row .player-name { background: var(--gold-light); }
 
-.cell-input {
-  width: 66px;
+.cell-value {
+  display: inline-block;
+  min-width: 28px;
   text-align: center;
-  padding: 9px 6px;
   font-weight: 700;
+  color: var(--text);
 }
+.cell-value.bust { color: var(--coral-dark); }
 .flip7-tag {
   display: inline-block;
   margin-left: 4px;
@@ -731,7 +733,6 @@ tfoot td { padding-top: 10px; }
 
   /* score table: tighter cells */
   table.score th, table.score td { padding: 10px 8px; }
-  .cell-input { width: 54px; padding: 8px 4px; }
   .total-cell { font-size: 18px; }
 
   /* round entry: stack the name above its controls */
