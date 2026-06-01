@@ -168,6 +168,7 @@ let pollTimer = null;
 function go(name, params = {}) {
   route = { name, ...params };
   render();
+  window.scrollTo(0, 0); // always start a new screen at the top
 }
 
 document.getElementById("homeBtn").addEventListener("click", () => go("home"));
