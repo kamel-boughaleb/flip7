@@ -1,16 +1,82 @@
-/* Flip 7 Scoreboard — vanilla JS.
+/* Flip 7 / Skyjo Scoreboard — vanilla JS.
    Shared persistence via Supabase, with a localStorage fallback when unconfigured. */
 
+// Single shared store for every game type (legacy key kept for back-compat).
 const STORE_KEY = "flip7_games";
-const FLIP7_BONUS = 15;
-const DEFAULT_TARGET = 200;
 
-// Game variant. Both play first-to-200 with manual score entry, so the mode is
-// informational (which rule set the table is using). Legacy games without a
-// stored mode are treated as classic.
-const GAME_MODES = { classic: "Classique", vengeance: "Vengeance" };
+/* ---------- game rulesets ----------
+   Each ruleset captures everything score-related for a family of games, so the
+   rest of the app stays game-agnostic. Adding a game = adding a ruleset (+ a
+   mode entry below). Functions (cellValue, scoreOrder, win condition) let
+   wildly different games coexist — e.g. Flip 7 (highest wins, first to 200)
+   and Skyjo (lowest wins, ends when someone reaches 100).
+
+   Cell shapes differ per ruleset:
+     flip7  → { points, flip7, bust }
+     skyjo  → { points }  (may be negative) */
+const RULESETS = {
+  flip7: {
+    target: 200,
+    bonus: 15,
+    scoreOrder: "desc", // higher total ranks first
+    entry: "flip7", // score-entry UI variant
+    cellValue(cell) {
+      if (!cell || cell.bust) return 0;
+      return (Number(cell.points) || 0) + (cell.flip7 ? this.bonus : 0);
+    },
+  },
+  skyjo: {
+    target: 100,
+    scoreOrder: "asc", // lower total ranks first
+    entry: "number",
+    cellValue(cell) {
+      return Number(cell && cell.points) || 0;
+    },
+  },
+};
+
+/* ---------- modes ----------
+   A "mode" is a selectable entry in the new-game picker. Several modes can map
+   to the same ruleset (Flip 7 variants share scoring, only their rules text
+   differs). The mode key is stored on each game and used as a CSS modifier
+   (mode-classic / mode-vengeance / mode-skyjo). Legacy games (no mode) are
+   treated as "classic". */
+const MODES = {
+  classic: { label: "Flip 7", ruleset: "flip7", rules: () => rulesClassicHTML() },
+  vengeance: {
+    label: "Flip 7 Vengeance",
+    ruleset: "flip7",
+    rules: () => rulesVengeanceHTML(),
+  },
+  skyjo: { label: "Skyjo", ruleset: "skyjo", rules: () => rulesSkyjoHTML() },
+};
+const DEFAULT_MODE = "classic";
+
+// The ruleset a game (or mode key) plays by.
+function rulesetOf(mode) {
+  return RULESETS[MODES[mode]?.ruleset] || RULESETS.flip7;
+}
+function defFor(game) {
+  return rulesetOf(game && game.mode);
+}
 function modeLabel(mode) {
-  return GAME_MODES[mode] || GAME_MODES.classic;
+  return (MODES[mode] || MODES[DEFAULT_MODE]).label;
+}
+// CSS modifier class for a mode badge (falls back to the default mode).
+function modeClass(mode) {
+  return "mode-" + (MODES[mode] ? mode : DEFAULT_MODE);
+}
+function rulesFor(mode) {
+  return (MODES[mode] || MODES[DEFAULT_MODE]).rules();
+}
+// New-game / edit "Type de partie" tab buttons, generated from the registry.
+function modeTabsHTML() {
+  return Object.entries(MODES)
+    .map(
+      ([key, m]) =>
+        `<button type="button" class="mode-tab" data-mode="${key}">${esc(m.label)}</button>`,
+    )
+    .join("");
 }
 
 /* ---------- Supabase client ---------- */
@@ -211,35 +277,53 @@ function firstDuplicateName(names) {
 }
 
 /* ---------- scoring ---------- */
-// A cell is { points: number, flip7: boolean, bust: boolean }
-function cellValue(cell) {
-  if (!cell || cell.bust) return 0;
-  const pts = Number(cell.points) || 0;
-  return pts + (cell.flip7 ? FLIP7_BONUS : 0);
-}
 function playerTotal(game, playerId) {
-  return game.rounds.reduce((sum, r) => sum + cellValue(r.scores[playerId]), 0);
+  const def = defFor(game);
+  return game.rounds.reduce(
+    (sum, r) => sum + def.cellValue(r.scores[playerId]),
+    0,
+  );
 }
+// Standings sorted by the game's order (Flip 7: highest first; Skyjo: lowest
+// first). The leader — best by the game's rules — is always s[0].
 function standings(game) {
+  const asc = defFor(game).scoreOrder === "asc";
   return game.players
     .map((p) => ({ ...p, total: playerTotal(game, p.id) }))
-    .sort((a, b) => b.total - a.total);
+    .sort((a, b) => (asc ? a.total - b.total : b.total - a.total));
 }
-// Winning players. A cancelled game is won by the top scorer(s) (ties
-// included); otherwise the first player to reach the target wins.
-function winners(game) {
-  const s = standings(game);
+// Winning players from a standings array already sorted by the game's order.
+// A cancelled game is won by the current leader(s); otherwise the game is over
+// once ANY player reaches the target, and the leader(s) win (highest for
+// Flip 7, lowest for Skyjo). Ties at the leading total are all returned.
+function winnersFromStandings(game, s) {
   if (!s.length) return [];
-  if (game.cancelled) {
-    const max = s[0].total;
-    return s.filter((p) => p.total === max);
-  }
-  if (s[0].total >= game.target) return [s[0]];
+  const best = s[0].total;
+  if (game.cancelled) return s.filter((p) => p.total === best);
+  const reached = s.some((p) => p.total >= game.target);
+  if (reached) return s.filter((p) => p.total === best);
   return [];
+}
+function winners(game) {
+  return winnersFromStandings(game, standings(game));
 }
 // Single representative winner (or null). Truthy means the game is over.
 function winner(game) {
   return winners(game)[0] || null;
+}
+
+// Competition-style rank labels for an ALREADY-SORTED list. `tied(prev, cur)`
+// reports whether two adjacent entries share the same rank. Each result is
+// { place, label }: `place` is the rank of the tie group's leader (1-based,
+// gaps after ties — "1, 1, 3, 3, 5"…). Tied entries share that same number,
+// so `label` equals `place` for every entry.
+function rankLabels(sorted, tied) {
+  let place = 0;
+  return sorted.map((item, i) => {
+    const isTie = i > 0 && tied(sorted[i - 1], item);
+    if (!isTie) place = i + 1;
+    return { place, label: String(place) };
+  });
 }
 
 /* ---------- router ---------- */
@@ -309,18 +393,19 @@ function updatePlaceBtn() {
   } else {
     btn.hidden = true;
   }
+  updateTitle(place);
 }
 
-const KNOWN_ROUTES = [
-  "place",
-  "home",
-  "setup",
-  "stats",
-  "entry",
-  "editPlayers",
-  "game",
-  "details",
-];
+// Document title reflects the current place: "[Lieu] | Compteur de score".
+function updateTitle(place) {
+  const base = "Compteur de score";
+  document.title =
+    place !== null && route.name !== "place"
+      ? `${placeLabel(place)} | ${base}`
+      : base;
+}
+
+const KNOWN_ROUTES = ["place", "home", "stats", "entry", "game", "details"];
 
 function render() {
   stopPolling();
@@ -333,10 +418,8 @@ function render() {
     startHomePolling(); // live-refresh the games list every 2s
     return;
   }
-  if (route.name === "setup") return renderSetup();
   if (route.name === "stats") return renderStats();
   if (route.name === "entry") return renderEntry(route.id);
-  if (route.name === "editPlayers") return renderEditPlayers(route.id);
   if (route.name === "game") {
     renderGame(route.id);
     startPolling(route.id); // live-refresh the board every 2s
@@ -590,7 +673,7 @@ function celebrate(w, game) {
       done = true;
       clearTimeout(timer);
       overlay.remove();
-      go("setup", {
+      openSetupDialog({
         prefill: game.players.map((p) => p.name),
         mode: game.mode,
       });
@@ -716,27 +799,29 @@ let rulesTab = "classic";
 
 function rulesClassicHTML() {
   return `
+    <p class="rules-intro"><b>Flip 7</b> est un jeu de cartes de <b>« stop ou encore »</b> (push-your-luck) rapide et nerveux. À chaque manche, on pioche des cartes pour accumuler le plus de points possible… mais piocher un <b>doublon</b> vous élimine et vous fait tout perdre. Faut-il tenter une carte de plus ou s'arrêter à temps ? Premier à <b>200 points</b> gagne.</p>
+
     <h3><i class="fa-regular fa-bullseye"></i> But du jeu</h3>
-    <p>Être le premier joueur à atteindre <b>200 points</b>, cumulés sur plusieurs manches.</p>
+    <p>Être le premier joueur à atteindre <b>200 points</b>, cumulés sur plusieurs manches. Chaque manche, on essaie de banquer le plus de points sans se faire éliminer.</p>
 
     <h3><i class="fa-regular fa-cards"></i> Les cartes</h3>
     <ul>
       <li><b>Cartes numéro (0 à 12)</b> : il y a autant d'exemplaires d'un chiffre que sa valeur (douze « 12 », onze « 11 »… un seul « 1 »), plus une unique carte « 0 ».</li>
-      <li><b>Cartes modificateur</b> : +2, +4, +6, +8, +10 et ×2.</li>
+      <li><b>Cartes modificateur</b> : +2, +4, +6, +8, +10 et ×2 — elles font grimper le score de la manche.</li>
       <li><b>Cartes action</b> : Gel, Pioche Trois et Seconde Chance.</li>
     </ul>
 
     <h3><i class="fa-regular fa-arrows-rotate"></i> Déroulement d'une manche</h3>
-    <p>À tour de rôle, chaque joueur choisit de <b>piocher</b> une carte de plus ou de <b>s'arrêter</b> pour banquer ses points. Une fois arrêté ou éliminé, il ne joue plus jusqu'à la manche suivante.</p>
+    <p>À tour de rôle, chaque joueur choisit de <b>piocher</b> une carte de plus (« encore ») ou de <b>s'arrêter</b> (« stop ») pour banquer ses points. Une fois arrêté ou éliminé, on ne rejoue plus jusqu'à la manche suivante.</p>
 
     <h3><i class="fa-regular fa-burst"></i> Cartes numéro &amp; élimination</h3>
     <ul>
-      <li>Chaque carte numéro vaut sa valeur faciale.</li>
-      <li>Si vous piochez un chiffre que vous <b>possédez déjà</b> (doublon), vous êtes <b>éliminé</b> : 0 point pour la manche… sauf si vous avez une Seconde Chance.</li>
+      <li>Chaque carte numéro vaut sa <b>valeur faciale</b> et s'ajoute à votre total de manche.</li>
+      <li>Piocher un chiffre que vous <b>possédez déjà</b> (un doublon) vous <b>élimine</b> : 0 point pour la manche… sauf si vous détenez une Seconde Chance.</li>
     </ul>
 
     <h3><i class="fa-regular fa-star"></i> Le Flip 7</h3>
-    <p>Réunir <b>7 cartes numéro différentes</b> déclenche un « Flip 7 » : la manche se termine aussitôt et vous gagnez <b>+15 points</b> de bonus.</p>
+    <p>Réunir <b>7 cartes numéro différentes</b> déclenche un « Flip 7 » : la manche se termine <b>immédiatement</b> pour tout le monde et vous empochez un bonus de <b>+15 points</b>. C'est le gros coup de la partie.</p>
 
     <h3><i class="fa-regular fa-plus"></i> Cartes modificateur</h3>
     <ul>
@@ -747,26 +832,26 @@ function rulesClassicHTML() {
     <h3><i class="fa-regular fa-clapperboard"></i> Cartes action</h3>
     <ul>
       <li><b>Gel</b> : un joueur que vous désignez doit s'arrêter immédiatement et banquer ses points.</li>
-      <li><b>Pioche Trois</b> : un joueur doit piocher trois cartes d'affilée.</li>
+      <li><b>Pioche Trois</b> : un joueur doit piocher trois cartes d'affilée (en s'exposant aux doublons).</li>
       <li><b>Seconde Chance</b> : vous protège d'un doublon (vous le défaussez au lieu d'être éliminé). Si vous en recevez une deuxième, donnez-la à un joueur qui n'en a pas.</li>
     </ul>
 
     <h3><i class="fa-regular fa-flag-checkered"></i> Fin de la manche</h3>
-    <p>La manche s'arrête quand tous les joueurs se sont arrêtés ou éliminés, ou dès qu'un joueur réalise un Flip 7. Score de chacun : somme des cartes numéro (doublée si ×2) + modificateurs + 15 si Flip 7. Un joueur éliminé marque 0.</p>
+    <p>La manche s'arrête quand tous les joueurs se sont arrêtés ou éliminés, ou dès qu'un joueur réalise un Flip 7. Score de chacun : somme des cartes numéro (doublée si ×2) + modificateurs + 15 si Flip 7. Un joueur éliminé marque <b>0</b>.</p>
 
     <h3><i class="fa-regular fa-trophy"></i> Fin de la partie</h3>
     <p>Dès qu'un joueur atteint <b>200 points</b> au total, il gagne. Si plusieurs franchissent 200 dans la même manche, le <b>plus haut total</b> l'emporte.</p>
 
     <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
     <ul>
-      <li>Saisissez le total de chaque joueur pour chaque manche.</li>
+      <li>Saisissez le <b>total de chaque joueur</b> pour chaque manche.</li>
       <li>Cochez <b>« Flip 7 (+15) »</b> pour ajouter le bonus, ou <b>« Éliminé »</b> pour marquer 0.</li>
     </ul>`;
 }
 
 function rulesVengeanceHTML() {
   return `
-    <p class="rules-intro"><b>Flip 7 : With a Vengeance</b> est la suite de Flip 7. Le principe ne change pas (premier à <b>200 points</b>), mais le jeu ajoute des cartes plus chaotiques. Les bases (tours, élimination sur doublon, Flip 7 = +15) restent celles de l'onglet <b>Flip 7 Classic</b> — voici ce qui est <b>nouveau</b>.</p>
+    <p class="rules-intro"><b>Flip 7 : With a Vengeance</b> est la suite de Flip 7. Le principe ne change pas (premier à <b>200 points</b>), mais le jeu ajoute des cartes plus chaotiques. Les bases (tours, élimination sur doublon, Flip 7 = +15) restent celles de l'onglet <b>Flip 7</b> — voici ce qui est <b>nouveau</b>.</p>
 
     <h3><i class="fa-regular fa-list-ol"></i> Nouvelles cartes numéro</h3>
     <ul>
@@ -813,12 +898,48 @@ function rulesVengeanceHTML() {
     </ul>`;
 }
 
+function rulesSkyjoHTML() {
+  return `
+    <p class="rules-intro"><b>Skyjo</b> est un jeu de cartes où l'on cherche à avoir <b>le moins de points possible</b>. La partie se joue en plusieurs manches ; elle s'arrête dès qu'un joueur atteint <b>100 points</b>, et c'est le joueur avec le <b>total le plus bas</b> qui gagne.</p>
+
+    <h3><i class="fa-regular fa-bullseye"></i> But du jeu</h3>
+    <p>Avoir le <b>plus petit total</b> de points à la fin de la partie. Contrairement à Flip 7, les points sont une malus : on veut les éviter.</p>
+
+    <h3><i class="fa-regular fa-cards"></i> Les cartes</h3>
+    <ul>
+      <li>150 cartes de valeurs <b>−2 à 12</b> (les cartes négatives et les zéros font baisser votre score).</li>
+      <li>Chaque joueur dispose d'une grille de <b>3 × 4 cartes</b> (12 cartes), d'abord face cachée.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-arrows-rotate"></i> Déroulement d'une manche</h3>
+    <ul>
+      <li>À son tour, on pioche une carte (de la pioche ou de la défausse) et on l'échange avec une carte de sa grille, ou on retourne une carte cachée.</li>
+      <li><b>Colonne identique</b> : si une colonne de 3 cartes affiche la même valeur, elle est retirée et vaut <b>0</b>.</li>
+      <li>La manche se termine quand un joueur a <b>retourné toutes ses cartes</b> ; les autres jouent un dernier tour.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-calculator"></i> Décompte d'une manche</h3>
+    <ul>
+      <li>Chaque joueur additionne la valeur des cartes restantes dans sa grille.</li>
+      <li><b>Pénalité du premier sorti</b> : le joueur qui a terminé la manche <b>double son score de la manche</b> s'il n'a pas (seul) le plus petit total de la manche.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-trophy"></i> Fin de la partie</h3>
+    <p>Dès qu'un joueur atteint ou dépasse <b>100 points</b> au cumul, la partie s'arrête. Le joueur avec le <b>total le plus bas</b> l'emporte.</p>
+
+    <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
+    <ul>
+      <li>Saisissez le <b>score de chaque joueur pour chaque manche</b> (la valeur peut être <b>négative</b>).</li>
+      <li>Le classement met le <b>plus petit total en tête</b> ; le vainqueur prévisionnel est signalé d'une couronne dès qu'un joueur atteindrait 100.</li>
+    </ul>`;
+}
+
 // Rules shown in a dialog (opened from the top-bar book button).
 function openRulesDialog() {
   // When viewing a game, default the rules to that game's mode.
   if (["game", "details", "entry"].includes(route.name) && route.id) {
     const g = getGame(route.id);
-    if (g && GAME_MODES[g.mode]) rulesTab = g.mode;
+    if (g && MODES[g.mode]) rulesTab = g.mode;
   }
   const root = document.getElementById("modal-root");
   const overlay = el(`<div class="overlay"></div>`);
@@ -839,10 +960,14 @@ function openRulesDialog() {
   function draw() {
     body.innerHTML = `
       <div class="rules-tabs">
-        <button class="rules-tab ${rulesTab === "classic" ? "active" : ""}" data-tab="classic">Flip 7 Classic</button>
-        <button class="rules-tab ${rulesTab === "vengeance" ? "active" : ""}" data-tab="vengeance">Flip 7 Vengeance</button>
+        ${Object.entries(MODES)
+          .map(
+            ([key, m]) =>
+              `<button class="rules-tab ${rulesTab === key ? "active" : ""}" data-tab="${key}">${esc(m.label)}</button>`,
+          )
+          .join("")}
       </div>
-      <div class="rules">${rulesTab === "vengeance" ? rulesVengeanceHTML() : rulesClassicHTML()}</div>`;
+      <div class="rules">${rulesFor(rulesTab)}</div>`;
     body.querySelectorAll(".rules-tab").forEach((btn) => {
       btn.addEventListener("click", () => {
         rulesTab = btn.getAttribute("data-tab");
@@ -922,11 +1047,11 @@ function renderHome() {
     const hero = el(`
       <section class="hero">
         ${logoMarkup()}
-        <h2>Suivez vos parties de Flip 7</h2>
-        <p>Choisissez un lieu, créez une partie et enregistrez les points de chaque manche. Le premier à ${DEFAULT_TARGET} gagne. Un Flip 7 ajoute un bonus de +${FLIP7_BONUS}.</p>
+        <h2>Suivez vos parties de Flip 7 &amp; Skyjo</h2>
+        <p>Choisissez un lieu, créez une partie et enregistrez les points de chaque manche.</p>
         <button class="btn btn-primary" id="newGame">+ Nouvelle partie</button>
       </section>`);
-    hero.querySelector("#newGame").addEventListener("click", () => go("setup"));
+    hero.querySelector("#newGame").addEventListener("click", () => openSetupDialog());
     app.appendChild(wrapPanel(hero));
     app.appendChild(
       wrapPanel(
@@ -948,11 +1073,10 @@ function renderHome() {
   ];
   if (!FILTERS.some((f) => f.key === homeFilter)) homeFilter = "today";
   const nav = navTabs("home");
-  nav.appendChild(el(`<div class="spacer"></div>`));
   const newBtn = el(
-    `<button class="btn btn-primary btn-sm" id="newGame"><i class="fa-regular fa-plus"></i> <span class="btn-label">Nouvelle partie</span></button>`,
+    `<button class="btn btn-primary btn-sm ml-auto" id="newGame"><i class="fa-regular fa-plus"></i> <span class="btn-label">Nouvelle partie</span></button>`,
   );
-  newBtn.addEventListener("click", () => go("setup"));
+  newBtn.addEventListener("click", () => openSetupDialog());
   nav.appendChild(newBtn);
   app.appendChild(nav);
 
@@ -978,7 +1102,9 @@ function renderHome() {
           : homeFilter === "month"
             ? "ce mois"
             : "pour ce filtre";
-    app.appendChild(el(`<div class="empty">Aucune partie ${label}.</div>`));
+    app.appendChild(
+      wrapPanel(el(`<div class="empty">Aucune partie ${label}.</div>`)),
+    );
     return;
   }
 
@@ -1004,7 +1130,7 @@ function renderHome() {
     const card = el(`
       <div class="game-card ${g.cancelled ? "cancelled" : w ? "done" : "ongoing"}">
         <div class="meta">
-          <div class="name">${esc(g.name)} <span class="badge badge-sm mode-${g.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(g.mode))}</span></div>
+          <div class="name">${esc(g.name)} <span class="badge badge-sm ${modeClass(g.mode)}">${esc(modeLabel(g.mode))}</span></div>
           <div class="sub">${esc(names || "Aucun joueur")}${roundsNote}</div>
         </div>
         ${statusBadge}
@@ -1022,9 +1148,84 @@ function renderHome() {
 // Uses Pointer Events (mouse + touch) so reordering works on mobile too.
 function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
   let dragSrc = null;
-  // Autocompletion of player names already used at the current place.
+  // Autocompletion of player names already used at the current place. A custom
+  // dropdown is used instead of <datalist>, whose mobile support is unreliable.
   const suggestions = placePlayerNames(getSelectedPlace());
-  const LIST_ID = "player-name-suggestions";
+
+  // Wire a custom suggestions dropdown to a row's name input. The dropdown is
+  // portalled to <body> (position: fixed) so it's never clipped by a dialog's
+  // overflow:hidden; it's positioned under the input and follows scroll/resize.
+  function wireSuggestions(input, i) {
+    if (!suggestions.length) return;
+    let box = null;
+    const place = () => {
+      const r = input.getBoundingClientRect();
+      const gap = 4;
+      const h = box.offsetHeight;
+      // Lower bound = the dialog footer top (so the menu doesn't cover it),
+      // falling back to the viewport bottom outside a dialog.
+      const modal = input.closest(".modal");
+      const foot = modal && modal.querySelector(".scores-dialog-foot");
+      const limit = foot ? foot.getBoundingClientRect().top : window.innerHeight;
+      // Open upward when there isn't enough room below the input.
+      const openUp = limit - r.bottom < h + gap;
+      box.style.left = `${r.left}px`;
+      box.style.width = `${r.width}px`;
+      box.style.top = openUp ? `${r.top - h - gap}px` : `${r.bottom + gap}px`;
+    };
+    const reposition = () => box && place();
+    const close = () => {
+      if (!box) return;
+      box.remove();
+      box = null;
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+    const renderList = () => {
+      const q = (input.value || "").trim().toLowerCase();
+      // Hide names already chosen in other rows + the current exact value.
+      const taken = new Set(
+        players
+          .filter((_, k) => k !== i)
+          .map((p) => (p.name || "").trim().toLowerCase())
+          .filter(Boolean),
+      );
+      const matches = suggestions
+        .filter((n) => {
+          const nl = n.toLowerCase();
+          return !taken.has(nl) && nl !== q && (!q || nl.includes(q));
+        })
+        .slice(0, 6);
+      if (!matches.length) return close();
+      if (!box) {
+        box = el(`<div class="name-suggest"></div>`);
+        document.body.appendChild(box);
+        // pointerdown (not click) fires before blur — works for touch and mouse.
+        box.addEventListener("pointerdown", (e) => {
+          const btn = e.target.closest(".name-suggest-item");
+          if (!btn) return;
+          e.preventDefault();
+          input.value = btn.textContent;
+          players[i].name = btn.textContent;
+          close();
+          revalidate(i);
+        });
+        window.addEventListener("resize", reposition);
+        window.addEventListener("scroll", reposition, true);
+      }
+      box.innerHTML = matches
+        .map(
+          (n) =>
+            `<button type="button" class="name-suggest-item">${esc(n)}</button>`,
+        )
+        .join("");
+      place();
+    };
+    input.addEventListener("focus", renderList);
+    input.addEventListener("input", renderList);
+    // Delay so a tap on an item registers before the list hides.
+    input.addEventListener("blur", () => setTimeout(close, 150));
+  }
 
   // Index of the row whose upper half currently contains pointer Y, i.e. the
   // insertion target. Falls back to the last row when below every center.
@@ -1044,20 +1245,17 @@ function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
   }
 
   function draw() {
+    // Drop any portalled suggestion dropdowns left over from removed rows.
+    document.querySelectorAll("body > .name-suggest").forEach((b) => b.remove());
     rowsEl.innerHTML = "";
-    if (suggestions.length) {
-      rowsEl.appendChild(
-        el(
-          `<datalist id="${LIST_ID}">${suggestions.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`,
-        ),
-      );
-    }
     players.forEach((p, i) => {
       const row = el(`
         <div class="player-row" data-i="${i}">
           <span class="drag-handle" title="Déplacer"><i class="fa-regular fa-grip-dots-vertical"></i></span>
           <div class="player-input-wrap">
-            <input type="text" placeholder="Nom du joueur" value="${esc(p.name)}" ${suggestions.length ? `list="${LIST_ID}"` : ""} autocomplete="off" />
+            <div class="name-field">
+              <input type="text" placeholder="Nom du joueur" value="${esc(p.name)}" autocomplete="off" />
+            </div>
             <div class="player-error" hidden></div>
           </div>
           ${allowRemove ? `<button class="btn btn-danger btn-icon" title="Retirer"><i class="fa-regular fa-xmark"></i></button>` : ""}
@@ -1067,6 +1265,7 @@ function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
         players[i].name = e.target.value;
         revalidate(i);
       });
+      wireSuggestions(input, i);
       if (allowRemove) {
         row.querySelector("button").addEventListener("click", () => {
           players.splice(i, 1);
@@ -1143,46 +1342,47 @@ function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
 }
 
 /* ---------- Setup ---------- */
-function renderSetup() {
-  app.innerHTML = "";
-  let players = route.prefill
-    ? route.prefill.map((n) => ({ id: uid(), name: n }))
-    : [
-        { id: uid(), name: "" },
-        { id: uid(), name: "" },
-      ];
+// New-game setup in a dialog. `opts` may carry { prefill: [names], mode }.
+function openSetupDialog(opts = {}) {
+  const place = getSelectedPlace();
+  if (place === null) return toast("Ajoutez ou choisissez un lieu d'abord");
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
 
-  const backRow = el(`
-    <div class="row">
-      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
-    </div>`);
-  backRow.querySelector("#back").addEventListener("click", () => go("home"));
-  app.appendChild(backRow);
+  let players =
+    opts.prefill && opts.prefill.length
+      ? opts.prefill.map((n) => ({ id: uid(), name: n }))
+      : [
+          { id: uid(), name: "" },
+          { id: uid(), name: "" },
+        ];
+  let mode = opts.mode && MODES[opts.mode] ? opts.mode : DEFAULT_MODE;
 
-  const wrap = el(`
-    <div class="panel">
-      <h2>Nouvelle partie</h2>
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>Nouvelle partie</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body">
       <div class="field">
         <label>Type de partie</label>
-        <div class="mode-tabs" id="modeTabs">
-          <button type="button" class="mode-tab" data-mode="classic">Flip 7 Classique</button>
-          <button type="button" class="mode-tab" data-mode="vengeance">Flip 7 Vengeance</button>
-        </div>
+        <div class="mode-tabs" id="modeTabs">${modeTabsHTML()}</div>
       </div>
       <div class="field">
         <label>Joueurs</label>
         <div class="player-rows" id="rows"></div>
         <button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>
       </div>
-      <div class="row">
-        <div class="spacer"></div>
-        <button class="btn btn-primary" id="start">Commencer la partie</button>
-      </div>
-    </div>`);
-  app.appendChild(wrapPanel(wrap));
+    </div>
+    <div class="scores-dialog-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-act="close">Annuler</button>
+      <button class="btn btn-primary" id="start">Commencer la partie</button>
+    </div>`;
 
-  let mode = route.mode && GAME_MODES[route.mode] ? route.mode : "classic";
-  const modeTabs = wrap.querySelector("#modeTabs");
+  const modeTabs = modal.querySelector("#modeTabs");
   const syncModeTabs = () =>
     modeTabs
       .querySelectorAll(".mode-tab")
@@ -1195,36 +1395,44 @@ function renderSetup() {
   );
   syncModeTabs();
 
-  const rowsEl = wrap.querySelector("#rows");
+  const rowsEl = modal.querySelector("#rows");
   const drawRows = renderPlayerRows(rowsEl, players);
-
-  wrap.querySelector("#addPlayer").addEventListener("click", () => {
+  modal.querySelector("#addPlayer").addEventListener("click", () => {
     players.push({ id: uid(), name: "" });
     drawRows();
     rowsEl.querySelector(".player-row:last-child input").focus();
   });
 
-  wrap.querySelector("#start").addEventListener("click", () => {
+  const close = () => overlay.remove();
+  modal
+    .querySelectorAll("[data-act=close]")
+    .forEach((b) => b.addEventListener("click", close));
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+
+  modal.querySelector("#start").addEventListener("click", () => {
     const valid = players.filter((p) => p.name.trim());
     if (valid.length < 2) return toast("Ajoutez au moins 2 joueurs");
     const dup = firstDuplicateName(valid.map((p) => p.name));
     if (dup) return toast(`« ${dup} » est présent en double`);
-    const place = getSelectedPlace();
-    if (place === null) return toast("Ajoutez ou choisissez un lieu d'abord");
     const now = Date.now();
     const game = {
       id: uid(),
       name: gameNameFromDate(now),
       createdAt: now,
-      target: DEFAULT_TARGET,
+      target: rulesetOf(mode).target,
       mode,
       place,
       players: valid.map((p) => ({ id: p.id, name: p.name.trim() })),
       rounds: [],
     };
     upsertGame(game);
+    overlay.remove();
     go("game", { id: game.id });
   });
+
+  root.appendChild(overlay);
 }
 
 /* ---------- Game ---------- */
@@ -1259,7 +1467,7 @@ function renderGame(id) {
       <div class="game-title">
         <div class="game-title-main">
           <h2>${esc(game.name)}</h2>
-          <span class="badge mode-${game.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(game.mode))}</span>
+          <span class="badge ${modeClass(game.mode)}">${esc(modeLabel(game.mode))}</span>
         </div>
         ${roundLine}
       </div>
@@ -1269,6 +1477,7 @@ function renderGame(id) {
       <div class="kebab">
         <button class="btn btn-ghost btn-sm btn-icon" id="moreBtn" aria-label="Plus d'options" aria-haspopup="true" aria-expanded="false"><i class="fa-regular fa-ellipsis"></i></button>
         <div class="kebab-menu" id="moreMenu" hidden>
+          <button class="kebab-item" id="shareBtn"><i class="fa-regular fa-share-nodes"></i> Partager</button>
           ${game.cancelled ? "" : `<button class="kebab-item" id="cancel"><i class="fa-regular fa-ban"></i> Annuler</button>`}
           <button class="kebab-item" id="del"><i class="fa-regular fa-trash-can"></i> Supprimer</button>
         </div>
@@ -1276,7 +1485,7 @@ function renderGame(id) {
     </div>`);
   head
     .querySelector("#editPlayers")
-    .addEventListener("click", () => go("editPlayers", { id: game.id }));
+    .addEventListener("click", () => openEditPlayersDialog(game));
 
   // "..." options menu (Annuler / Supprimer)
   const moreBtn = head.querySelector("#moreBtn");
@@ -1295,6 +1504,24 @@ function renderGame(id) {
     moreMenu.hidden = !open;
     moreBtn.setAttribute("aria-expanded", String(open));
     if (open) document.addEventListener("click", onOutside);
+  });
+
+  // Share the game via the native share sheet (clipboard fallback).
+  head.querySelector("#shareBtn").addEventListener("click", async () => {
+    closeMenu();
+    const url = window.location.href;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: game.name, url });
+      } else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        toast("Lien copié");
+      } else {
+        toast("Partage non disponible");
+      }
+    } catch (e) {
+      if (e && e.name !== "AbortError") toast("Partage impossible");
+    }
   });
 
   const cancelBtn = head.querySelector("#cancel");
@@ -1370,7 +1597,7 @@ function renderGame(id) {
   linksWrap
     .querySelector("#newGameSamePlayers")
     .addEventListener("click", () =>
-      go("setup", {
+      openSetupDialog({
         prefill: game.players.map((p) => p.name),
         mode: game.mode,
       }),
@@ -1387,21 +1614,54 @@ function buildSummary(game, st, w) {
     `<table class="score summary-table"><thead><tr><th class="rank-col">#</th><th class="player-name">Joueur</th><th>Total</th></tr></thead></table>`,
   );
   const tbody = el(`<tbody></tbody>`);
+  const labels = rankLabels(st, (a, b) => a.total === b.total);
+  // In-progress (pre-saved) round: show each player's projected total in muted.
+  const draft = game.draftRound || {};
+  const def = defFor(game);
+  const hasDraftFor = (p) => {
+    const dc = draft[p.id];
+    return dc && ((dc.points !== "" && dc.points != null) || dc.flip7 || dc.bust);
+  };
+  const projected = {};
+  st.forEach((p) => {
+    projected[p.id] =
+      p.total + (hasDraftFor(p) ? def.cellValue(draft[p.id]) : 0);
+  });
+  // Projected winner(s): only when the game isn't already won and a round is in
+  // progress — the leader(s) under the game's rules once the target is reached
+  // (highest for Flip 7, lowest for Skyjo).
+  const projWinnerIds = new Set();
+  if (!w && st.some(hasDraftFor)) {
+    const projStandings = st
+      .map((p) => ({ id: p.id, total: projected[p.id] }))
+      .sort((a, b) =>
+        def.scoreOrder === "asc" ? a.total - b.total : b.total - a.total,
+      );
+    winnersFromStandings(game, projStandings).forEach((p) =>
+      projWinnerIds.add(p.id),
+    );
+  }
   st.forEach((p, i) => {
-    const rank = i + 1;
+    const { place, label } = labels[i];
     const won = winIds.has(p.id);
     const crown = won
       ? '<span class="crown"><i class="fa-regular fa-crown"></i></span>'
       : "";
-    const rankClass = `rank${rank}`;
+    const rankClass = `rank${place}`;
     const rankBadge = hasRounds
-      ? `<span class="badge ${rankClass}">${rank}</span>`
+      ? `<span class="badge ${rankClass}">${label}</span>`
+      : "";
+    const previewCrown = projWinnerIds.has(p.id)
+      ? ' <span class="crown"><i class="fa-regular fa-crown"></i></span>'
+      : "";
+    const preview = hasDraftFor(p)
+      ? `<span class="score-preview"> → ${projected[p.id]}${previewCrown}</span>`
       : "";
     const tr = el(`
       <tr class="${won ? "winner-row" : ""}">
         <td class="rank-col">${rankBadge}</td>
         <td class="player-name">${esc(p.name)}</td>
-        <td class="total-cell"><span class="score-badge ${rankClass}">${p.total}${crown}</span></td>
+        <td class="total-cell"><span class="score-badge ${rankClass}">${p.total}${crown}</span>${preview}</td>
       </tr>`);
     tbody.appendChild(tr);
   });
@@ -1418,9 +1678,10 @@ function renderDetails(id) {
 
   const st = standings(game);
   const w = winner(game);
+  const labels = rankLabels(st, (a, b) => a.total === b.total);
   const rankMap = {};
   st.forEach((p, i) => {
-    rankMap[p.id] = i + 1;
+    rankMap[p.id] = { order: i, place: labels[i].place, label: labels[i].label };
   });
 
   const backRow = el(`
@@ -1436,7 +1697,7 @@ function renderDetails(id) {
     el(`
       <div class="game-head">
         <h2>Détails des scores</h2>
-        <span class="badge mode-${game.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(game.mode))}</span>
+        <span class="badge ${modeClass(game.mode)}">${esc(modeLabel(game.mode))}</span>
         <span class="target-note">${esc(game.name)}</span>
       </div>`),
   );
@@ -1461,14 +1722,14 @@ function buildTable(game, rankMap, w) {
   // body — rows ordered by rank (same as the other screens)
   const tbody = el(`<tbody></tbody>`);
   const orderedPlayers = [...game.players].sort(
-    (a, b) => rankMap[a.id] - rankMap[b.id],
+    (a, b) => rankMap[a.id].order - rankMap[b.id].order,
   );
   orderedPlayers.forEach((p) => {
     const total = playerTotal(game, p.id);
-    const rank = rankMap[p.id];
+    const { place, label } = rankMap[p.id];
     const won = winIds.has(p.id);
     const rankBadge = hasRounds
-      ? `<span class="badge rank${rank}">${rank}</span>`
+      ? `<span class="badge rank${place}">${label}</span>`
       : "";
     const tr = el(
       `<tr class="${won ? "winner-row" : ""}"><td class="rank-col">${rankBadge}</td><td class="player-name">${esc(p.name)}</td></tr>`,
@@ -1501,7 +1762,7 @@ function buildTable(game, rankMap, w) {
     const crown = won
       ? '<span class="crown"><i class="fa-regular fa-crown"></i></span>'
       : "";
-    const rankClass = `rank${rank}`;
+    const rankClass = `rank${place}`;
     const totalTd = el(
       `<td class="total-cell"><span class="score-badge ${rankClass}">${total}${crown}</span></td>`,
     );
@@ -1541,6 +1802,75 @@ function buildTable(game, rankMap, w) {
   return wrap;
 }
 
+// Does a draft cell hold any entered data?
+function draftHasData(d) {
+  return d && ((d.points !== "" && d.points != null) || d.flip7 || d.bust);
+}
+// Convert a draft cell to a stored round cell, per the game's entry style.
+function draftToCell(def, d) {
+  if (def.entry === "number") return { points: Number(d.points) || 0 };
+  return {
+    points: d.bust ? 0 : Number(d.points) || 0,
+    flip7: d.bust ? false : !!d.flip7,
+    bust: !!d.bust,
+  };
+}
+// Build and wire one player's score-entry row. `draft[p.id]` must be set.
+// Renders the Flip 7 controls (number + bonus + Éliminé) or, for "number"
+// games like Skyjo, a single number input (negatives allowed).
+function buildEntryRow(game, draft, p) {
+  const def = defFor(game);
+  const d = draft[p.id];
+  if (def.entry === "number") {
+    const row = el(`
+      <div class="entry-player">
+        <span class="pname">${esc(p.name)}</span>
+        <div class="entry-controls">
+          <input type="number" class="cell-input" placeholder="0" value="${esc(d.points)}" />
+        </div>
+      </div>`);
+    row.querySelector("input").addEventListener("input", (e) => {
+      draft[p.id].points = e.target.value;
+    });
+    return row;
+  }
+  const row = el(`
+    <div class="entry-player ${d.bust ? "busted" : d.flip7 ? "flipped" : ""}">
+      <span class="pname">${esc(p.name)}</span>
+      <div class="entry-controls">
+        <input type="number" class="cell-input" placeholder="0" min="0" value="${d.bust ? "" : esc(d.points)}" ${d.bust ? "disabled" : ""} />
+        <button type="button" class="btn btn-ghost btn-sm flip7-btn ${d.flip7 ? "active" : ""}" ${d.bust ? "disabled" : ""}><i class="fa-regular fa-star"></i> Flip 7 (+${def.bonus})</button>
+        <button type="button" class="btn btn-ghost btn-sm bust-btn ${d.bust ? "active" : ""}">Éliminé</button>
+      </div>
+    </div>`);
+  const numInput = row.querySelector('input[type="number"]');
+  const flipBtn = row.querySelector(".flip7-btn");
+  const bustBtn = row.querySelector(".bust-btn");
+  numInput.addEventListener("input", (e) => {
+    draft[p.id].points = e.target.value;
+  });
+  flipBtn.addEventListener("click", () => {
+    if (draft[p.id].bust) return;
+    draft[p.id].flip7 = !draft[p.id].flip7;
+    flipBtn.classList.toggle("active", draft[p.id].flip7);
+    row.classList.toggle("flipped", draft[p.id].flip7);
+  });
+  bustBtn.addEventListener("click", () => {
+    draft[p.id].bust = !draft[p.id].bust;
+    bustBtn.classList.toggle("active", draft[p.id].bust);
+    row.classList.toggle("busted", draft[p.id].bust);
+    numInput.disabled = draft[p.id].bust;
+    flipBtn.disabled = draft[p.id].bust;
+    if (draft[p.id].bust) {
+      numInput.value = "";
+      draft[p.id].flip7 = false;
+      flipBtn.classList.remove("active");
+      row.classList.remove("flipped");
+    }
+  });
+  return row;
+}
+
 function buildRoundEntry(game) {
   const section = el(`
     <div class="panel round-entry">
@@ -1561,53 +1891,14 @@ function buildRoundEntry(game) {
   const draft = {};
   game.players.forEach((p) => {
     draft[p.id] = { points: "", flip7: false, bust: false };
-    const row = el(`
-      <div class="entry-player">
-        <span class="pname">${esc(p.name)}</span>
-        <div class="entry-controls">
-          <input type="number" class="cell-input" placeholder="0" min="0" />
-          <button type="button" class="btn btn-ghost btn-sm flip7-btn"><i class="fa-regular fa-star"></i> Flip 7 (+${FLIP7_BONUS})</button>
-          <button type="button" class="btn btn-ghost btn-sm bust-btn">Éliminé</button>
-        </div>
-      </div>`);
-    const numInput = row.querySelector('input[type="number"]');
-    const flipBtn = row.querySelector(".flip7-btn");
-    const bustBtn = row.querySelector(".bust-btn");
-
-    numInput.addEventListener("input", (e) => {
-      draft[p.id].points = e.target.value;
-    });
-    flipBtn.addEventListener("click", () => {
-      if (draft[p.id].bust) return;
-      draft[p.id].flip7 = !draft[p.id].flip7;
-      flipBtn.classList.toggle("active", draft[p.id].flip7);
-      row.classList.toggle("flipped", draft[p.id].flip7);
-    });
-    bustBtn.addEventListener("click", () => {
-      draft[p.id].bust = !draft[p.id].bust;
-      bustBtn.classList.toggle("active", draft[p.id].bust);
-      row.classList.toggle("busted", draft[p.id].bust);
-      numInput.disabled = draft[p.id].bust;
-      flipBtn.disabled = draft[p.id].bust;
-      if (draft[p.id].bust) {
-        numInput.value = "";
-        draft[p.id].flip7 = false;
-        flipBtn.classList.remove("active");
-        row.classList.remove("flipped");
-      }
-    });
-    grid.appendChild(row);
+    grid.appendChild(buildEntryRow(game, draft, p));
   });
 
   section.querySelector("#saveRound").addEventListener("click", () => {
+    const def = defFor(game);
     const scores = {};
     game.players.forEach((p) => {
-      const d = draft[p.id];
-      scores[p.id] = {
-        points: d.bust ? 0 : Number(d.points) || 0,
-        flip7: d.bust ? false : !!d.flip7,
-        bust: !!d.bust,
-      };
+      scores[p.id] = draftToCell(def, draft[p.id]);
     });
     const g = getGame(game.id);
     const beforeWinnerId = (winner(g) || {}).id || null;
@@ -1652,51 +1943,12 @@ function openScoresDialog(game) {
       flip7: !!s.flip7,
       bust: !!s.bust,
     };
-    const d = draft[p.id];
-    const row = el(`
-      <div class="entry-player ${d.bust ? "busted" : d.flip7 ? "flipped" : ""}">
-        <span class="pname">${esc(p.name)}</span>
-        <div class="entry-controls">
-          <input type="number" class="cell-input" placeholder="0" min="0" value="${d.bust ? "" : esc(d.points)}" ${d.bust ? "disabled" : ""} />
-          <button type="button" class="btn btn-ghost btn-sm flip7-btn ${d.flip7 ? "active" : ""}" ${d.bust ? "disabled" : ""}><i class="fa-regular fa-star"></i> Flip 7 (+${FLIP7_BONUS})</button>
-          <button type="button" class="btn btn-ghost btn-sm bust-btn ${d.bust ? "active" : ""}">Éliminé</button>
-        </div>
-      </div>`);
-    const numInput = row.querySelector('input[type="number"]');
-    const flipBtn = row.querySelector(".flip7-btn");
-    const bustBtn = row.querySelector(".bust-btn");
-
-    numInput.addEventListener("input", (e) => {
-      draft[p.id].points = e.target.value;
-    });
-    flipBtn.addEventListener("click", () => {
-      if (draft[p.id].bust) return;
-      draft[p.id].flip7 = !draft[p.id].flip7;
-      flipBtn.classList.toggle("active", draft[p.id].flip7);
-      row.classList.toggle("flipped", draft[p.id].flip7);
-    });
-    bustBtn.addEventListener("click", () => {
-      draft[p.id].bust = !draft[p.id].bust;
-      bustBtn.classList.toggle("active", draft[p.id].bust);
-      row.classList.toggle("busted", draft[p.id].bust);
-      numInput.disabled = draft[p.id].bust;
-      flipBtn.disabled = draft[p.id].bust;
-      if (draft[p.id].bust) {
-        numInput.value = "";
-        draft[p.id].flip7 = false;
-        flipBtn.classList.remove("active");
-        row.classList.remove("flipped");
-      }
-    });
-    grid.appendChild(row);
+    grid.appendChild(buildEntryRow(game, draft, p));
   });
 
   // Leaving the dialog (×, Annuler, click outside) pre-saves the in-progress
   // round so it can be resumed later. Empty drafts clear any saved one.
-  const hasData = () =>
-    Object.values(draft).some(
-      (d) => (d.points !== "" && d.points != null) || d.flip7 || d.bust,
-    );
+  const hasData = () => Object.values(draft).some(draftHasData);
   const closeKeepingDraft = () => {
     const g = getGame(game.id);
     g.draftRound = hasData() ? JSON.parse(JSON.stringify(draft)) : null;
@@ -1713,14 +1965,10 @@ function openScoresDialog(game) {
   });
 
   modal.querySelector("#saveRound").addEventListener("click", () => {
+    const def = defFor(game);
     const scores = {};
     game.players.forEach((p) => {
-      const d2 = draft[p.id];
-      scores[p.id] = {
-        points: d2.bust ? 0 : Number(d2.points) || 0,
-        flip7: d2.bust ? false : !!d2.flip7,
-        bust: !!d2.bust,
-      };
+      scores[p.id] = draftToCell(def, draft[p.id]);
     });
     const g = getGame(game.id);
     const beforeWinnerId = (winner(g) || {}).id || null;
@@ -1737,62 +1985,42 @@ function openScoresDialog(game) {
 }
 
 /* ---------- Edit Players ---------- */
-function renderEditPlayers(id) {
-  const game = getGame(id);
-  if (!game) return go("home");
-  app.innerHTML = "";
+// Edit a game's roster and type in a dialog.
+function openEditPlayersDialog(game) {
+  const id = game.id;
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
 
   let players = game.players.map((p) => ({ ...p }));
   // A finished or cancelled game keeps its roster fixed — no add/remove.
   const locked = !!winner(game);
+  let mode = MODES[game.mode] ? game.mode : DEFAULT_MODE;
 
-  const backRow = el(`
-    <div class="row">
-      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
-    </div>`);
-  backRow.querySelector("#back").addEventListener("click", () => go("game", { id }));
-  app.appendChild(backRow);
-
-  app.appendChild(
-    el(`
-      <div class="game-head">
-        <div class="game-title">
-          <div class="game-title-main">
-            <h2>${esc(game.name)}</h2>
-            <span class="badge mode-${game.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(game.mode))}</span>
-          </div>
-        </div>
-      </div>`),
-  );
-
-  const wrap = el(`
-    <div class="panel">
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>Modifier la partie</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body">
       <div class="field">
         <label>Type de partie</label>
-        <div class="mode-tabs" id="modeTabs">
-          <button type="button" class="mode-tab" data-mode="classic">Flip 7 Classique</button>
-          <button type="button" class="mode-tab" data-mode="vengeance">Flip 7 Vengeance</button>
-        </div>
+        <div class="mode-tabs" id="modeTabs">${modeTabsHTML()}</div>
       </div>
       <div class="field">
         <label>Joueurs</label>
         <div class="player-rows" id="rows"></div>
         ${locked ? "" : `<button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>`}
       </div>
-      <div class="row">
-        <div class="spacer"></div>
-        <button class="btn btn-ghost" id="cancelEdit">Annuler</button>
-        <button class="btn btn-primary" id="save">Enregistrer</button>
-      </div>
-    </div>`);
-  const panelWrap = el(`<div class="panel-wrap"></div>`);
-  panelWrap.appendChild(wrap);
-  app.appendChild(panelWrap);
+    </div>
+    <div class="scores-dialog-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-act="close">Annuler</button>
+      <button class="btn btn-primary" id="save">Enregistrer</button>
+    </div>`;
 
-  wrap.querySelector("#cancelEdit").addEventListener("click", () => go("game", { id }));
-
-  let mode = GAME_MODES[game.mode] ? game.mode : "classic";
-  const modeTabs = wrap.querySelector("#modeTabs");
+  const modeTabs = modal.querySelector("#modeTabs");
   const syncModeTabs = () =>
     modeTabs
       .querySelectorAll(".mode-tab")
@@ -1805,11 +2033,9 @@ function renderEditPlayers(id) {
   );
   syncModeTabs();
 
-  const rowsEl = wrap.querySelector("#rows");
-
+  const rowsEl = modal.querySelector("#rows");
   const drawRows = renderPlayerRows(rowsEl, players, { allowRemove: !locked });
-
-  const addBtn = wrap.querySelector("#addPlayer");
+  const addBtn = modal.querySelector("#addPlayer");
   if (addBtn) {
     addBtn.addEventListener("click", () => {
       players.push({ id: uid(), name: "" });
@@ -1818,7 +2044,15 @@ function renderEditPlayers(id) {
     });
   }
 
-  wrap.querySelector("#save").addEventListener("click", () => {
+  const close = () => overlay.remove();
+  modal
+    .querySelectorAll("[data-act=close]")
+    .forEach((b) => b.addEventListener("click", close));
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+
+  modal.querySelector("#save").addEventListener("click", () => {
     const valid = players.filter((p) => p.name.trim());
     if (valid.length < 2) return toast("Au moins 2 joueurs requis");
     const dup = firstDuplicateName(valid.map((p) => p.name));
@@ -1826,9 +2060,13 @@ function renderEditPlayers(id) {
     const g = getGame(id);
     g.players = valid.map((p) => ({ id: p.id, name: p.name.trim() }));
     g.mode = mode;
+    g.target = rulesetOf(mode).target; // follow the (possibly new) ruleset
     upsertGame(g);
+    overlay.remove();
     go("game", { id });
   });
+
+  root.appendChild(overlay);
 }
 
 /* ---------- Entry (screen 2) ---------- */
@@ -1853,7 +2091,7 @@ function renderEntry(id) {
         <div class="game-title">
           <div class="game-title-main">
             <h2>${esc(game.name)}</h2>
-            <span class="badge mode-${game.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(game.mode))}</span>
+            <span class="badge ${modeClass(game.mode)}">${esc(modeLabel(game.mode))}</span>
           </div>
         </div>
       </div>`),
@@ -1863,14 +2101,18 @@ function renderEntry(id) {
 }
 
 /* ---------- Stats (per place, keyed by player name) ---------- */
-// `mode` filters the games considered: "all" | "classic" | "vengeance".
-// Legacy games without a stored mode count as classic.
-function computeStats(place, mode = "all") {
-  let games = gamesForPlace(place);
-  if (mode === "classic")
-    games = games.filter((g) => (g.mode || "classic") === "classic");
-  else if (mode === "vengeance")
-    games = games.filter((g) => g.mode === "vengeance");
+// Stats filters. "flip7" (Général) pools both Flip 7 variants; the others are
+// a single mode/game. `order` is how points rank (Skyjo: fewer is better).
+// Legacy games (no stored mode) count as Flip 7 classic.
+const STAT_FILTERS = {
+  flip7: { match: (g) => rulesetOf(g.mode) === RULESETS.flip7, order: "desc" },
+  classic: { match: (g) => (g.mode || "classic") === "classic", order: "desc" },
+  vengeance: { match: (g) => g.mode === "vengeance", order: "desc" },
+  skyjo: { match: (g) => g.mode === "skyjo", order: "asc" },
+};
+function computeStats(place, filter = "flip7") {
+  const f = STAT_FILTERS[filter] || STAT_FILTERS.flip7;
+  const games = gamesForPlace(place).filter(f.match);
   const map = {}; // key: lowercased trimmed name -> aggregate
   games.forEach((g) => {
     const w = winner(g);
@@ -1887,8 +2129,12 @@ function computeStats(place, mode = "all") {
       if (map[key]) map[key].wins += 1;
     }
   });
+  const ptsCmp =
+    f.order === "asc"
+      ? (a, b) => a.points - b.points
+      : (a, b) => b.points - a.points;
   return Object.values(map).sort(
-    (a, b) => b.wins - a.wins || b.points - a.points || b.games - a.games,
+    (a, b) => b.wins - a.wins || ptsCmp(a, b) || b.games - a.games,
   );
 }
 
@@ -1900,12 +2146,14 @@ function renderStats() {
   app.appendChild(navTabs("stats"));
 
   // Version filter, styled like the games-list date filter (segmented).
+  // "Général" pools both Flip 7 variants; Skyjo is tracked separately.
   const VERSIONS = [
-    { key: "all", label: "Général" },
-    { key: "classic", label: "Classique" },
-    { key: "vengeance", label: "Vengeance" },
+    { key: "flip7", label: "Flip 7 + Vengeance" },
+    { key: "classic", label: "Flip 7" },
+    { key: "vengeance", label: "Flip 7 Vengeance" },
+    { key: "skyjo", label: "Skyjo" },
   ];
-  let statMode = "all";
+  let statMode = "flip7";
   const controls = el(`
     <div class="date-filter" id="versionFilter">
       ${VERSIONS.map((v) => `<button type="button" data-v="${v.key}" class="${v.key === statMode ? "active" : ""}">${v.label}</button>`).join("")}
@@ -1929,13 +2177,13 @@ function renderStats() {
     content.innerHTML = "";
     const stats = computeStats(place, mode);
     if (!stats.length) {
-      const modeTxt =
-        mode === "all"
-          ? ""
-          : ` en ${mode === "classic" ? "Classique" : "Vengeance"}`;
+      const ver = VERSIONS.find((v) => v.key === mode);
+      const modeTxt = mode === "flip7" ? "" : ` en ${ver.label}`;
       content.appendChild(
-        el(
-          `<div class="empty">Aucune donnée pour « ${esc(placeLabel(place))} »${modeTxt}. Jouez une partie pour voir les statistiques.</div>`,
+        wrapPanel(
+          el(
+            `<div class="empty">Aucune donnée pour « ${esc(placeLabel(place))} »${modeTxt}. Jouez une partie pour voir les statistiques.</div>`,
+          ),
         ),
       );
       return;
@@ -1947,18 +2195,22 @@ function renderStats() {
         <thead><tr>
           <th class="rank-col">#</th>
           <th class="player-name">Joueur</th>
-          <th>Parties jouées</th>
-          <th>Points totaux</th>
+          <th>Parties</th>
+          <th>Points</th>
           <th>Victoires</th>
         </tr></thead>
       </table>`);
     const tbody = el(`<tbody></tbody>`);
+    const labels = rankLabels(
+      stats,
+      (a, b) => a.wins === b.wins && a.points === b.points && a.games === b.games,
+    );
     stats.forEach((s, i) => {
-      const rank = i + 1;
-      const rankClass = `rank${rank}`;
+      const { place, label } = labels[i];
+      const rankClass = `rank${place}`;
       const tr = el(`
-        <tr class="${rank === 1 ? "winner-row" : ""}">
-          <td class="rank-col"><span class="badge ${rankClass}">${rank}</span></td>
+        <tr class="${place === 1 ? "winner-row" : ""}">
+          <td class="rank-col"><span class="badge ${rankClass}">${label}</span></td>
           <td class="player-name">${esc(s.name)}</td>
           <td>${s.games}</td>
           <td>${s.points}</td>
@@ -1997,7 +2249,7 @@ function renderStats() {
 
 /* ---------- boot ---------- */
 (async function boot() {
-  app.innerHTML = `<div class="empty">Chargement…</div>`;
+  app.innerHTML = `<div class="panel-wrap"><div class="empty">Chargement…</div></div>`;
   await fetchGames();
   if (location.hash) {
     selectPlaceFromHash(location.hash);

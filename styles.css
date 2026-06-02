@@ -21,6 +21,21 @@
   --cream: #fff8e7;
   --sky: #5dade2;
 
+  /* Flip 7 Vengeance accent */
+  --vengeance: #3631a0; /* lighter gradient stop */
+  --vengeance-dark: #242074; /* base / border */
+  --vengeance-glow: rgba(36, 32, 116, 0.45);
+
+  /* Flip 7 (classic) accent */
+  --classic: #009da2; /* lighter gradient stop / base */
+  --classic-dark: #007a7e; /* darker stop / border */
+  --classic-glow: rgba(0, 157, 162, 0.45);
+
+  /* Skyjo accent */
+  --skyjo: #51b47c; /* lighter gradient stop / base */
+  --skyjo-dark: #3a8a5c; /* darker stop / border */
+  --skyjo-glow: rgba(81, 180, 124, 0.45);
+
   --surface: #eff8f7; /* page bg */
   --card: #ffffff; /* card bg */
 
@@ -167,9 +182,19 @@ main {
 main > * {
   padding-left: 1rem;
   padding-right: 1rem;
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
   width: 100%;
+}
+
+/* The fanned-cards logo needs its own top padding to make room for the fan;
+   keep it out of the first-child reset. */
+main > *:first-child:not(.flip7-logo) {
+  padding-top: 0px;
+}
+
+main > *:last-child {
+  padding-bottom: 0px;
 }
 
 h2 {
@@ -425,6 +450,9 @@ h3 {
 .spacer {
   flex: 1;
 }
+.ml-auto {
+  margin-left: auto;
+}
 .muted {
   color: var(--muted);
 }
@@ -646,6 +674,42 @@ input:focus {
   gap: 1rem 0.5rem;
   min-width: 0;
 }
+.name-field {
+  position: relative;
+}
+.name-field input {
+  width: 100%;
+}
+/* custom name autocompletion dropdown (reliable on mobile, unlike <datalist>).
+   Portalled to <body> with fixed positioning (JS sets left/top/width) so it
+   floats above dialogs instead of being clipped by their overflow:hidden. */
+.name-suggest {
+  position: fixed;
+  z-index: 40;
+  background: var(--card);
+  border: 2px solid var(--teal-light);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  overflow-y: auto;
+  max-height: 13.5rem;
+}
+.name-suggest-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  color: var(--teal-dark);
+  padding: 0.625rem 0.875rem;
+}
+.name-suggest-item:hover,
+.name-suggest-item:active {
+  background: var(--teal-bg);
+}
 .player-error {
   color: var(--error);
   font-size: 0.75rem;
@@ -741,21 +805,25 @@ input:focus {
   color: #fff;
 }
 .rules-tab.active[data-tab="classic"] {
-  background: linear-gradient(135deg, var(--teal-light), var(--teal-dark));
-  border-color: var(--teal-dark);
-  box-shadow: 0 2px 12px rgba(43, 168, 162, 0.45);
+  background: linear-gradient(135deg, var(--classic), var(--classic-dark));
+  border-color: var(--classic-dark);
+  box-shadow: 0 2px 12px var(--classic-glow);
 }
 .rules-tab.active[data-tab="vengeance"] {
-  background: linear-gradient(135deg, #c0392b, #7d241b);
-  border-color: #7d241b;
-  box-shadow: 0 2px 12px rgba(192, 57, 43, 0.45);
+  background: linear-gradient(135deg, var(--vengeance), var(--vengeance-dark));
+  border-color: var(--vengeance-dark);
+  box-shadow: 0 2px 12px var(--vengeance-glow);
+}
+.rules-tab.active[data-tab="skyjo"] {
+  background: linear-gradient(135deg, var(--skyjo), var(--skyjo-dark));
+  border-color: var(--skyjo-dark);
+  box-shadow: 0 2px 12px var(--skyjo-glow);
 }
 
 /* top navigation tabs (Home / Stats) — filled pill for the active tab */
 .nav-tabs {
   display: flex;
   align-items: center;
-  gap: 1rem 0.5rem;
 }
 .nav-tab {
   appearance: none;
@@ -794,7 +862,15 @@ input:focus {
 }
 
 /* "new game" button shows icon only on very small screens */
-@media (max-width: 370px) {
+@media (max-width: 410px) {
+  #newGame i {
+    display: none;
+  }
+}
+@media (max-width: 380px) {
+  #newGame i {
+    display: inline-block;
+  }
   #newGame .btn-label {
     display: none;
   }
@@ -842,15 +918,26 @@ input:focus {
   box-shadow: var(--shadow-teal-glow);
 }
 /* stats version filter: active Classique / Vengeance match their badges */
+/* "Flip 7 + Vengeance" — blend of the two Flip 7 accents */
+#versionFilter button.active[data-v="flip7"] {
+  background: linear-gradient(135deg, var(--classic), var(--vengeance-dark));
+  border-color: var(--vengeance-dark);
+  box-shadow: 0 2px 12px var(--classic-glow);
+}
 #versionFilter button.active[data-v="classic"] {
-  background: linear-gradient(135deg, var(--teal-light), var(--teal-dark));
-  border-color: var(--teal-dark);
-  box-shadow: 0 2px 12px rgba(43, 168, 162, 0.45);
+  background: linear-gradient(135deg, var(--classic), var(--classic-dark));
+  border-color: var(--classic-dark);
+  box-shadow: 0 2px 12px var(--classic-glow);
 }
 #versionFilter button.active[data-v="vengeance"] {
-  background: linear-gradient(135deg, #c0392b, #7d241b);
-  border-color: #7d241b;
-  box-shadow: 0 2px 12px rgba(192, 57, 43, 0.45);
+  background: linear-gradient(135deg, var(--vengeance), var(--vengeance-dark));
+  border-color: var(--vengeance-dark);
+  box-shadow: 0 2px 12px var(--vengeance-glow);
+}
+#versionFilter button.active[data-v="skyjo"] {
+  background: linear-gradient(135deg, var(--skyjo), var(--skyjo-dark));
+  border-color: var(--skyjo-dark);
+  box-shadow: 0 2px 12px var(--skyjo-glow);
 }
 
 /* game-mode selector (Setup) — same look as the rules tabs */
@@ -885,21 +972,30 @@ input:focus {
   color: #fff;
 }
 .mode-tab.active[data-mode="classic"] {
-  background: linear-gradient(135deg, var(--teal-light), var(--teal-dark));
-  border-color: var(--teal-dark);
-  box-shadow: 0 2px 12px rgba(43, 168, 162, 0.45);
+  background: linear-gradient(135deg, var(--classic), var(--classic-dark));
+  border-color: var(--classic-dark);
+  box-shadow: 0 2px 12px var(--classic-glow);
 }
 .mode-tab.active[data-mode="vengeance"] {
-  background: linear-gradient(135deg, #c0392b, #7d241b);
-  border-color: #7d241b;
-  box-shadow: 0 2px 12px rgba(192, 57, 43, 0.45);
+  background: linear-gradient(135deg, var(--vengeance), var(--vengeance-dark));
+  border-color: var(--vengeance-dark);
+  box-shadow: 0 2px 12px var(--vengeance-glow);
+}
+.mode-tab.active[data-mode="skyjo"] {
+  background: linear-gradient(135deg, var(--skyjo), var(--skyjo-dark));
+  border-color: var(--skyjo-dark);
+  box-shadow: 0 2px 12px var(--skyjo-glow);
 }
 .badge.mode-classic {
-  background: linear-gradient(135deg, var(--teal-light), var(--teal-dark));
+  background: linear-gradient(135deg, var(--classic), var(--classic-dark));
   color: #fff;
 }
 .badge.mode-vengeance {
-  background: linear-gradient(135deg, #c0392b, #7d241b);
+  background: linear-gradient(135deg, var(--vengeance), var(--vengeance-dark));
+  color: #fff;
+}
+.badge.mode-skyjo {
+  background: linear-gradient(135deg, var(--skyjo), var(--skyjo-dark));
   color: #fff;
 }
 
@@ -948,7 +1044,7 @@ input:focus {
 .game-title {
   display: flex;
   flex-direction: column;
-  gap: 1rem 0.5rem;
+  gap: 0.5rem;
 }
 .game-title-main {
   display: flex;
@@ -1056,7 +1152,8 @@ table.score {
   width: 100%;
   min-width: 32.5rem;
 }
-table.score.summary-table {
+table.score.summary-table,
+table.score.stats-table {
   min-width: 0;
 }
 table.score th,
@@ -1128,6 +1225,17 @@ input.cell-input::-webkit-inner-spin-button {
   gap: 1rem 0.5rem;
   font-weight: 800;
   white-space: nowrap;
+}
+/* projected total from an in-progress (pre-saved) round */
+.score-preview {
+  margin-left: 0.375rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.score-preview .crown {
+  color: var(--gold-dark);
 }
 .rank-col {
   width: 1px;
@@ -1254,6 +1362,11 @@ tfoot td .btn-icon {
   padding: 1rem;
   backdrop-filter: blur(3px);
 }
+/* Lock background scroll whenever any dialog is open. */
+html:has(.overlay),
+body:has(.overlay) {
+  overflow: hidden;
+}
 .modal {
   background: var(--card);
   border-radius: var(--r-xl);
@@ -1282,7 +1395,7 @@ tfoot td .btn-icon {
 /* rules dialog (opened from the top bar): fixed header, scrollable body */
 .modal-rules {
   max-width: 50rem;
-  max-height: 85vh;
+  height: 100%;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1330,7 +1443,7 @@ tfoot td .btn-icon {
 /* scores dialog: fixed header, scrollable body, fixed footer */
 .modal-scores {
   max-width: 50rem;
-  max-height: 85vh;
+  max-height: 100%;
   padding: 0;
   display: flex;
   flex-direction: column;
