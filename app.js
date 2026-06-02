@@ -924,15 +924,15 @@ function renderHome() {
         ${logoMarkup()}
         <h2>Suivez vos parties de Flip 7</h2>
         <p>Choisissez un lieu, créez une partie et enregistrez les points de chaque manche. Le premier à ${DEFAULT_TARGET} gagne. Un Flip 7 ajoute un bonus de +${FLIP7_BONUS}.</p>
-        <div class="row" style="justify-content:center;flex-wrap:wrap">
-          <button class="btn btn-primary" id="newGame">+ Nouvelle partie</button>
-        </div>
+        <button class="btn btn-primary" id="newGame">+ Nouvelle partie</button>
       </section>`);
     hero.querySelector("#newGame").addEventListener("click", () => go("setup"));
-    app.appendChild(hero);
+    app.appendChild(wrapPanel(hero));
     app.appendChild(
-      el(
-        `<div class="empty">Aucune partie à « ${esc(placeLabel(place))} » pour l'instant. Créez-en une ci-dessus.</div>`,
+      wrapPanel(
+        el(
+          `<div class="empty">Aucune partie à « ${esc(placeLabel(place))} » pour l'instant. Créez-en une ci-dessus.</div>`,
+        ),
       ),
     );
     return;
@@ -998,7 +998,7 @@ function renderHome() {
       : w
         ? `<span class="badge rank1"><i class="fa-regular fa-trophy"></i> ${esc(w.name)}</span>`
         : `<div class="status-cell">
-             <span class="badge ongoing">En cours</span>
+             <span class="badge ongoing">En cours <i class="fa-regular fa-spinner-third fa-spin"></i></span>
              <span class="round-note">Manche ${g.rounds.length + 1}</span>
            </div>`;
     const card = el(`
