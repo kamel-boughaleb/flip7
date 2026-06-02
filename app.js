@@ -5,6 +5,14 @@ const STORE_KEY = "flip7_games";
 const FLIP7_BONUS = 15;
 const DEFAULT_TARGET = 200;
 
+// Game variant. Both play first-to-200 with manual score entry, so the mode is
+// informational (which rule set the table is using). Legacy games without a
+// stored mode are treated as classic.
+const GAME_MODES = { classic: "Classique", vengeance: "Vengeance" };
+function modeLabel(mode) {
+  return GAME_MODES[mode] || GAME_MODES.classic;
+}
+
 /* ---------- Supabase client ---------- */
 function makeClient() {
   const cfg = window.FLIP7_CONFIG || {};
@@ -16,7 +24,7 @@ function makeClient() {
     !/VOTRE-|YOUR-/i.test(cfg.url);
   if (!ready) {
     console.warn(
-      "[Flip7] Supabase non configuré — stockage local (données non partagées). Renseignez config.js."
+      "[Flip7] Supabase non configuré — stockage local (données non partagées). Renseignez config.js.",
     );
     return null;
   }
@@ -95,8 +103,8 @@ const uid = () => Math.random().toString(36).slice(2, 9);
    The selected place is per-device (localStorage). The list of places is
    shared, derived from the games themselves (+ places added locally but not
    yet used). "" means "Sans lieu" (legacy games with no place). */
-const PLACE_KEY = "flip7_place";    // currently selected place (name; "" = Sans lieu)
-const PLACES_KEY = "flip7_places";  // places added on this device (may have no games yet)
+const PLACE_KEY = "flip7_place"; // currently selected place (name; "" = Sans lieu)
+const PLACES_KEY = "flip7_places"; // places added on this device (may have no games yet)
 
 function getSelectedPlace() {
   const v = localStorage.getItem(PLACE_KEY);
@@ -106,7 +114,11 @@ function setSelectedPlace(name) {
   localStorage.setItem(PLACE_KEY, name == null ? "" : name);
 }
 function localPlaces() {
-  try { return JSON.parse(localStorage.getItem(PLACES_KEY)) || []; } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem(PLACES_KEY)) || [];
+  } catch {
+    return [];
+  }
 }
 function addLocalPlace(name) {
   const list = localPlaces();
@@ -136,7 +148,66 @@ function allPlaces() {
 }
 function gamesForPlace(place) {
   const key = (place || "").trim().toLowerCase();
-  return loadGames().filter((g) => (g.place || "").trim().toLowerCase() === key);
+  // loadGames() is already sorted by createdAt desc; a stable sort by
+  // "ongoing first" keeps that recency order within each group.
+  return loadGames()
+    .filter((g) => (g.place || "").trim().toLowerCase() === key)
+    .sort((a, b) => (winner(a) ? 1 : 0) - (winner(b) ? 1 : 0));
+}
+
+// Start of the current day / ISO week (Monday) as epoch ms.
+function startOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+function startOfWeek() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  const monIdx = (d.getDay() + 6) % 7; // Monday = 0
+  d.setDate(d.getDate() - monIdx);
+  return d.getTime();
+}
+function startOfMonth() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(1);
+  return d.getTime();
+}
+// Keep games created within the selected window ("today" | "week" | "month" | "all").
+function filterGamesByDate(games, filter) {
+  if (filter === "all") return games;
+  const from =
+    filter === "month"
+      ? startOfMonth()
+      : filter === "week"
+        ? startOfWeek()
+        : startOfToday();
+  return games.filter((g) => (g.createdAt || 0) >= from);
+}
+
+// Unique player names already used at a place (for name autocompletion).
+function placePlayerNames(place) {
+  const seen = new Map(); // lowercased -> original casing
+  gamesForPlace(place).forEach((g) =>
+    g.players.forEach((p) => {
+      const n = (p.name || "").trim();
+      if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+    }),
+  );
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, "fr"));
+}
+
+// Returns the first name appearing more than once (case/space-insensitive), or null.
+function firstDuplicateName(names) {
+  const seen = new Set();
+  for (const n of names) {
+    const key = (n || "").trim().toLowerCase();
+    if (!key) continue;
+    if (seen.has(key)) return n.trim();
+    seen.add(key);
+  }
+  return null;
 }
 
 /* ---------- scoring ---------- */
@@ -154,17 +225,28 @@ function standings(game) {
     .map((p) => ({ ...p, total: playerTotal(game, p.id) }))
     .sort((a, b) => b.total - a.total);
 }
-function winner(game) {
+// Winning players. A cancelled game is won by the top scorer(s) (ties
+// included); otherwise the first player to reach the target wins.
+function winners(game) {
   const s = standings(game);
-  if (s.length && s[0].total >= game.target) return s[0];
-  return null;
+  if (!s.length) return [];
+  if (game.cancelled) {
+    const max = s[0].total;
+    return s.filter((p) => p.total === max);
+  }
+  if (s[0].total >= game.target) return [s[0]];
+  return [];
+}
+// Single representative winner (or null). Truthy means the game is over.
+function winner(game) {
+  return winners(game)[0] || null;
 }
 
 /* ---------- router ---------- */
 const app = document.getElementById("app");
 let route = { name: "place" };
+let homeFilter = "today"; // games list date filter: "today" | "week" | "month" | "all"
 let pollTimer = null;
-let _ignoreHashChange = false;
 
 function routeToHash(name, params = {}) {
   const base = params.id ? `${name}/${params.id}` : name;
@@ -173,39 +255,48 @@ function routeToHash(name, params = {}) {
   return `#${base}${q}`;
 }
 
+// Pure: hash → route. No side effects (place restoration is done separately).
 function hashToRoute(hash) {
   const h = (hash || "").replace(/^#/, "");
   if (!h) return { name: "place" };
-  const [pathPart, queryPart] = h.split("?");
-  const [name, id] = pathPart.split("/");
-  // Restaure le lieu depuis l'URL (lien direct, retour navigateur, partage)
-  if (queryPart) {
-    const params = new URLSearchParams(queryPart);
-    if (params.has("p")) setSelectedPlace(params.get("p"));
-  }
+  const [name, id] = h.split("?")[0].split("/");
   return id ? { name, id } : { name };
+}
+// Restaure le lieu depuis l'URL (lien direct, retour navigateur, partage).
+function selectPlaceFromHash(hash) {
+  const queryPart = (hash || "").split("?")[1];
+  if (!queryPart) return;
+  const params = new URLSearchParams(queryPart);
+  if (params.has("p")) setSelectedPlace(params.get("p"));
 }
 
 function go(name, params = {}) {
   route = { name, ...params };
-  _ignoreHashChange = true;
+  // Setting the hash fires `hashchange`, but our equality guard below makes it
+  // a no-op since `route` already matches — so we render here directly.
   location.hash = routeToHash(name, params);
-  _ignoreHashChange = false;
   render();
   window.scrollTo(0, 0); // always start a new screen at the top
 }
 
 window.addEventListener("hashchange", () => {
-  if (_ignoreHashChange) return;
+  selectPlaceFromHash(location.hash);
   const newRoute = hashToRoute(location.hash);
-  // Ne pas re-render si seul le nom/id correspond déjà (évite d'écraser prefill etc.)
+  // Ne pas re-render si seul le nom/id correspond déjà (évite d'écraser prefill
+  // après un go(), et le double-render qu'il provoquerait).
   if (newRoute.name === route.name && newRoute.id === route.id) return;
   route = newRoute;
   render();
+  window.scrollTo(0, 0);
 });
 
 document.getElementById("homeBtn").addEventListener("click", () => go("home"));
-document.getElementById("placeBtn").addEventListener("click", () => go("place"));
+document
+  .getElementById("placeBtn")
+  .addEventListener("click", () => go("place"));
+document
+  .getElementById("rulesBtn")
+  .addEventListener("click", () => openRulesDialog());
 
 // Top-left button showing the current place (hidden on the place screen / before a place is set).
 function updatePlaceBtn() {
@@ -220,12 +311,28 @@ function updatePlaceBtn() {
   }
 }
 
+const KNOWN_ROUTES = [
+  "place",
+  "home",
+  "setup",
+  "stats",
+  "entry",
+  "editPlayers",
+  "game",
+  "details",
+];
+
 function render() {
   stopPolling();
+  // Unknown / stale route names fall back to home (keeps route.name coherent).
+  if (!KNOWN_ROUTES.includes(route.name)) route = { name: "home" };
   updatePlaceBtn();
   if (route.name === "place") return renderPlace();
-  if (route.name === "rules") return renderRules();
-  if (route.name === "home") return renderHome();
+  if (route.name === "home") {
+    renderHome();
+    startHomePolling(); // live-refresh the games list every 2s
+    return;
+  }
   if (route.name === "setup") return renderSetup();
   if (route.name === "stats") return renderStats();
   if (route.name === "entry") return renderEntry(route.id);
@@ -244,7 +351,26 @@ function render() {
 }
 
 function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+// Auto-refresh the home games list (mirrors the score-screen polling), so a
+// game created on another device appears without a manual refresh.
+function startHomePolling() {
+  stopPolling();
+  if (!db) return; // nothing to sync from in local mode
+  pollTimer = setInterval(async () => {
+    if (route.name !== "home") return stopPolling();
+    // don't disrupt an open dialog (e.g. delete confirmation)
+    if (document.querySelector("#modal-root .overlay")) return;
+    const place = getSelectedPlace();
+    const before = JSON.stringify(gamesForPlace(place));
+    await fetchGames();
+    if (route.name !== "home") return;
+    if (JSON.stringify(gamesForPlace(place)) !== before) renderHome();
+  }, 2000);
 }
 function startPolling(id) {
   stopPolling();
@@ -271,19 +397,56 @@ function el(html) {
   t.innerHTML = html.trim();
   return t.content.firstElementChild;
 }
+// Wrap a node in a gutter-bearing container (so full-width cards keep side margins).
+function wrapPanel(node) {
+  const w = el(`<div class="panel-wrap"></div>`);
+  w.appendChild(node);
+  return w;
+}
 function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  return String(s).replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
   );
 }
 function fmtDate(ts) {
   const d = new Date(ts);
-  return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
+  return d.toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+// Human-readable duration, e.g. "1 h 23 min", "12 min 05 s", "45 s".
+function fmtDuration(ms) {
+  const total = Math.round(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h} h ${String(m).padStart(2, "0")} min`;
+  if (m) return `${m} min ${String(s).padStart(2, "0")} s`;
+  return `${s} s`;
+}
+// Elapsed time between the first and last recorded round (null if unknown).
+function gameDuration(game) {
+  const r = game.rounds;
+  if (r.length < 2) return null;
+  const first = r[0].at,
+    last = r[r.length - 1].at;
+  if (!first || !last || last <= first) return null;
+  return last - first;
 }
 // e.g. "Partie du lundi 25 mai à 13h30"
 function gameNameFromDate(ts) {
   const d = new Date(ts);
-  const date = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+  const date = d.toLocaleDateString("fr-FR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
   const m = String(d.getMinutes()).padStart(2, "0");
   return `Partie du ${date} à ${d.getHours()}h${m}`;
 }
@@ -294,6 +457,21 @@ function toast(msg) {
 }
 
 // Big fan-card FLIP7 logo (home hero / setup header)
+// Top navigation tabs shared by Home and Stats. `active` is "home" | "stats".
+function navTabs(active) {
+  const nav = el(`
+    <div class="nav-tabs">
+      <button type="button" class="nav-tab ${active === "home" ? "active" : ""}" data-go="home"><i class="fa-regular fa-list-ul"></i> Parties</button>
+      <button type="button" class="nav-tab ${active === "stats" ? "active" : ""}" data-go="stats"><i class="fa-regular fa-chart-simple"></i> Statistiques</button>
+    </div>`);
+  nav.querySelectorAll(".nav-tab").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (b.dataset.go !== active) go(b.dataset.go);
+    }),
+  );
+  return nav;
+}
+
 function logoMarkup() {
   return `
     <div class="flip7-logo">
@@ -307,7 +485,13 @@ function logoMarkup() {
 
 // Confetti burst inside a positioned container
 function confettiMarkup(n = 14) {
-  const colors = ["var(--gold)", "var(--coral)", "var(--teal)", "var(--sky)", "var(--gold-dark)"];
+  const colors = [
+    "var(--gold)",
+    "var(--coral)",
+    "var(--teal)",
+    "var(--sky)",
+    "var(--gold-dark)",
+  ];
   let pieces = "";
   for (let i = 0; i < n; i++) {
     const left = Math.round((i / n) * 100);
@@ -339,14 +523,27 @@ const CONGRATS = [
   "Trop fort pour ce monde !",
 ];
 const CEL_EMOJIS = [
-  "party-horn", "trophy", "face-party", "burst", "crown",
-  "sparkles", "fire", "hand-fist", "rocket", "face-grin-stars",
+  "party-horn",
+  "trophy",
+  "face-party",
+  "burst",
+  "crown",
+  "sparkles",
+  "fire",
+  "hand-fist",
+  "rocket",
+  "face-grin-stars",
 ].map((name) => `<i class="fa-regular fa-${name}"></i>`);
 
 function celConfettiMarkup(n = 70) {
   const colors = [
-    "var(--gold)", "var(--coral)", "var(--teal)", "var(--sky)",
-    "var(--gold-dark)", "var(--coral-light)", "var(--teal-light)",
+    "var(--gold)",
+    "var(--coral)",
+    "var(--teal)",
+    "var(--sky)",
+    "var(--gold-dark)",
+    "var(--coral-light)",
+    "var(--teal-light)",
   ];
   let pieces = "";
   for (let i = 0; i < n; i++) {
@@ -381,10 +578,24 @@ function celebrate(w, game) {
       </div>
     </div>`);
   let done = false;
-  const remove = () => { if (done) return; done = true; clearTimeout(timer); overlay.remove(); };
+  const remove = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    overlay.remove();
+  };
   const timer = setTimeout(remove, 10000); // auto-dismiss after 10s
   overlay.addEventListener("click", (e) => {
-    if (e.target.classList.contains("cel-restart")) { done = true; clearTimeout(timer); overlay.remove(); go("setup", { prefill: game.players.map((p) => p.name) }); return; }
+    if (e.target.classList.contains("cel-restart")) {
+      done = true;
+      clearTimeout(timer);
+      overlay.remove();
+      go("setup", {
+        prefill: game.players.map((p) => p.name),
+        mode: game.mode,
+      });
+      return;
+    }
     remove();
   });
   document.body.appendChild(overlay);
@@ -412,7 +623,13 @@ function restartGame(game) {
   go("game", { id: newGame.id });
 }
 
-function confirmDialog({ title, body, confirmLabel = "Confirmer", cancelLabel = "Annuler", danger = false }) {
+function confirmDialog({
+  title,
+  body,
+  confirmLabel = "Confirmer",
+  cancelLabel = "Annuler",
+  danger = false,
+}) {
   return new Promise((resolve) => {
     const root = document.getElementById("modal-root");
     const overlay = el(`
@@ -426,7 +643,10 @@ function confirmDialog({ title, body, confirmLabel = "Confirmer", cancelLabel = 
           </div>
         </div>
       </div>`);
-    const close = (val) => { overlay.remove(); resolve(val); };
+    const close = (val) => {
+      overlay.remove();
+      resolve(val);
+    };
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close(false);
       const act = e.target.getAttribute("data-act");
@@ -437,7 +657,12 @@ function confirmDialog({ title, body, confirmLabel = "Confirmer", cancelLabel = 
   });
 }
 
-function promptDialog({ title, label, placeholder = "", confirmLabel = "Ajouter" }) {
+function promptDialog({
+  title,
+  label,
+  placeholder = "",
+  confirmLabel = "Ajouter",
+}) {
   return new Promise((resolve) => {
     const root = document.getElementById("modal-root");
     const overlay = el(`
@@ -455,7 +680,10 @@ function promptDialog({ title, label, placeholder = "", confirmLabel = "Ajouter"
         </div>
       </div>`);
     const input = overlay.querySelector("#promptInput");
-    const close = (val) => { overlay.remove(); resolve(val); };
+    const close = (val) => {
+      overlay.remove();
+      resolve(val);
+    };
     const submit = () => close(input.value.trim() || null);
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close(null);
@@ -463,7 +691,9 @@ function promptDialog({ title, label, placeholder = "", confirmLabel = "Ajouter"
       if (act === "cancel") close(null);
       if (act === "ok") submit();
     });
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submit();
+    });
     root.appendChild(overlay);
     setTimeout(() => input.focus(), 30);
   });
@@ -583,28 +813,49 @@ function rulesVengeanceHTML() {
     </ul>`;
 }
 
-function renderRules() {
-  app.innerHTML = "";
-  const wrap = el(`
-    <div>
-      <div class="row" style="margin-bottom:18px">
-        <button class="btn btn-ghost btn-sm" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
-      </div>
-      <div class="game-head"><h2><i class="fa-regular fa-book-open"></i> Règles</h2></div>
+// Rules shown in a dialog (opened from the top-bar book button).
+function openRulesDialog() {
+  // When viewing a game, default the rules to that game's mode.
+  if (["game", "details", "entry"].includes(route.name) && route.id) {
+    const g = getGame(route.id);
+    if (g && GAME_MODES[g.mode]) rulesTab = g.mode;
+  }
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-rules"></div>`);
+  overlay.appendChild(modal);
+
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3><i class="fa-regular fa-book-open"></i> Règles</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="rules-dialog-body"></div>`;
+  modal
+    .querySelector("[data-act=close]")
+    .addEventListener("click", () => overlay.remove());
+  const body = modal.querySelector(".rules-dialog-body");
+
+  function draw() {
+    body.innerHTML = `
       <div class="rules-tabs">
         <button class="rules-tab ${rulesTab === "classic" ? "active" : ""}" data-tab="classic">Flip 7 Classic</button>
         <button class="rules-tab ${rulesTab === "vengeance" ? "active" : ""}" data-tab="vengeance">Flip 7 Vengeance</button>
       </div>
-      <div class="panel rules" id="rulesBody">${rulesTab === "vengeance" ? rulesVengeanceHTML() : rulesClassicHTML()}</div>
-    </div>`);
-  wrap.querySelector("#back").addEventListener("click", () => go("place"));
-  wrap.querySelectorAll(".rules-tab").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      rulesTab = btn.getAttribute("data-tab");
-      renderRules();
+      <div class="rules">${rulesTab === "vengeance" ? rulesVengeanceHTML() : rulesClassicHTML()}</div>`;
+    body.querySelectorAll(".rules-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        rulesTab = btn.getAttribute("data-tab");
+        draw();
+      });
     });
+  }
+  draw();
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
   });
-  app.appendChild(wrap);
+  root.appendChild(overlay);
 }
 
 /* ---------- Place (entry screen) ---------- */
@@ -612,27 +863,22 @@ function renderPlace() {
   app.innerHTML = "";
   const current = getSelectedPlace();
 
+  app.appendChild(el(logoMarkup()));
+
   const wrap = el(`
-    <div>
-      ${logoMarkup()}
-      <div class="panel" style="max-width:480px;margin:0 auto">
-        <h2>Où jouez-vous&nbsp;?</h2>
-        <p class="muted" style="margin:-6px 0 18px">Indiquez le lieu. S'il existe déjà, vous le rejoignez ; sinon il est créé.</p>
-        <div class="field">
-          <label>Lieu</label>
-          <input type="text" id="placeInput" placeholder="ex. Maison, Bureau, Chalet…" />
-        </div>
-        <div class="row" style="margin-top:8px">
-          <div class="spacer"></div>
-          <button class="btn btn-primary btn-big" id="continue">Continuer <i class="fa-regular fa-arrow-right"></i></button>
-        </div>
+    <div class="panel" style="max-width:480px;margin:0 auto">
+      <h2>Où jouez-vous&nbsp;?</h2>
+      <p class="muted" style="margin:-6px 0 18px">Indiquez le lieu. S'il existe déjà, vous le rejoignez ; sinon il est créé.</p>
+      <div class="field">
+        <label>Lieu</label>
+        <input type="text" id="placeInput" placeholder="ex. Maison, Bureau, Chalet…" />
       </div>
-      <div class="rules-link-wrap">
-        <button class="link-btn" id="rulesLink"><i class="fa-regular fa-book-open"></i> Voir les règles du jeu</button>
+      <div class="row">
+        <div class="spacer"></div>
+        <button class="btn btn-primary btn-big" id="continue">Continuer <i class="fa-regular fa-arrow-right"></i></button>
       </div>
     </div>`);
-
-  wrap.querySelector("#rulesLink").addEventListener("click", () => go("rules"));
+  app.appendChild(wrapPanel(wrap));
 
   const input = wrap.querySelector("#placeInput");
   if (current) input.value = current;
@@ -652,9 +898,10 @@ function renderPlace() {
     go("home");
   };
   wrap.querySelector("#continue").addEventListener("click", submit);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submit();
+  });
 
-  app.appendChild(wrap);
   setTimeout(() => input.focus(), 30);
 }
 
@@ -665,122 +912,232 @@ function renderHome() {
   const place = getSelectedPlace();
   if (place === null) return go("place"); // must pick a place first
 
-  const hero = el(`
-    <section class="hero">
-      ${logoMarkup()}
-      <h2>Suivez vos parties de Flip 7</h2>
-      <p>Choisissez un lieu, créez une partie et enregistrez les points de chaque manche. Le premier à ${DEFAULT_TARGET} gagne. Un Flip 7 ajoute un bonus de +${FLIP7_BONUS}.</p>
-      <div class="row" style="justify-content:center;flex-wrap:wrap">
-        <button class="btn btn-primary" id="newGame">+ Nouvelle partie</button>
-        <button class="btn btn-ghost" id="statsBtn"><i class="fa-regular fa-chart-simple"></i> Statistiques</button>
-      </div>
-    </section>`);
-  hero.querySelector("#newGame").addEventListener("click", () => go("setup"));
-  hero.querySelector("#statsBtn").addEventListener("click", () => go("stats"));
-  app.appendChild(hero);
+  const games = gamesForPlace(place);
+
+  // The intro/hero (logo + description + actions) is only useful before any
+  // game exists for this place. Once games are listed, drop it and surface the
+  // new-game action in the toolbar.
+  if (!games.length) {
+    app.appendChild(navTabs("home"));
+    const hero = el(`
+      <section class="hero">
+        ${logoMarkup()}
+        <h2>Suivez vos parties de Flip 7</h2>
+        <p>Choisissez un lieu, créez une partie et enregistrez les points de chaque manche. Le premier à ${DEFAULT_TARGET} gagne. Un Flip 7 ajoute un bonus de +${FLIP7_BONUS}.</p>
+        <div class="row" style="justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-primary" id="newGame">+ Nouvelle partie</button>
+        </div>
+      </section>`);
+    hero.querySelector("#newGame").addEventListener("click", () => go("setup"));
+    app.appendChild(hero);
+    app.appendChild(
+      el(
+        `<div class="empty">Aucune partie à « ${esc(placeLabel(place))} » pour l'instant. Créez-en une ci-dessus.</div>`,
+      ),
+    );
+    return;
+  }
 
   // ----- games for this place -----
-  const listHead = el(`<div class="row" style="margin-bottom:14px"><h3 style="margin:0">Parties</h3><div class="spacer"></div></div>`);
-  if (db) {
-    const rb = el(`<button class="btn btn-ghost btn-sm" id="refresh"><i class="fa-regular fa-arrow-rotate-right"></i> Rafraîchir</button>`);
-    rb.addEventListener("click", async () => {
-      rb.disabled = true;
-      rb.textContent = "…";
-      await fetchGames();
-      if (route.name === "home") renderHome();
-    });
-    listHead.appendChild(rb);
-  }
-  app.appendChild(listHead);
+  // Tabs, date filter and "new game" sit directly in main (no wrapper).
+  const FILTERS = [
+    { key: "today", label: "Aujourd'hui" },
+    { key: "week", label: "Cette semaine" },
+    { key: "month", label: "Ce mois" },
+    { key: "all", label: "Toutes" },
+  ];
+  if (!FILTERS.some((f) => f.key === homeFilter)) homeFilter = "today";
+  const nav = navTabs("home");
+  nav.appendChild(el(`<div class="spacer"></div>`));
+  const newBtn = el(
+    `<button class="btn btn-primary btn-sm" id="newGame"><i class="fa-regular fa-plus"></i> <span class="btn-label">Nouvelle partie</span></button>`,
+  );
+  newBtn.addEventListener("click", () => go("setup"));
+  nav.appendChild(newBtn);
+  app.appendChild(nav);
 
-  const games = gamesForPlace(place);
-  if (!games.length) {
-    app.appendChild(el(`<div class="empty">Aucune partie à « ${esc(placeLabel(place))} » pour l'instant. Créez-en une ci-dessus.</div>`));
+  const filterEl = el(`
+    <div class="date-filter" id="dateFilter">
+      ${FILTERS.map((f) => `<button type="button" data-f="${f.key}" class="${f.key === homeFilter ? "active" : ""}">${f.label}</button>`).join("")}
+    </div>`);
+  filterEl.querySelectorAll("button").forEach((b) =>
+    b.addEventListener("click", () => {
+      homeFilter = b.dataset.f;
+      renderHome();
+    }),
+  );
+  app.appendChild(filterEl);
+
+  const filtered = filterGamesByDate(games, homeFilter);
+  if (!filtered.length) {
+    const label =
+      homeFilter === "today"
+        ? "aujourd'hui"
+        : homeFilter === "week"
+          ? "cette semaine"
+          : homeFilter === "month"
+            ? "ce mois"
+            : "pour ce filtre";
+    app.appendChild(el(`<div class="empty">Aucune partie ${label}.</div>`));
     return;
   }
 
   const list = el(`<div class="game-list"></div>`);
-  games.forEach((g) => {
+  filtered.forEach((g) => {
     const w = winner(g);
+    const ongoing = !g.cancelled && !w;
     const names = g.players.map((p) => p.name).join(", ");
+    let roundsNote = "";
+    if (!ongoing) {
+      roundsNote = ` · ${g.rounds.length} manche${g.rounds.length === 1 ? "" : "s"}`;
+      const dur = gameDuration(g);
+      if (dur != null) roundsNote += ` · ${fmtDuration(dur)}`;
+    }
+    const statusBadge = g.cancelled
+      ? `<span class="badge cancelled"><i class="fa-regular fa-ban"></i> Annulée</span>`
+      : w
+        ? `<span class="badge rank1"><i class="fa-regular fa-trophy"></i> ${esc(w.name)}</span>`
+        : `<div class="status-cell">
+             <span class="badge ongoing">En cours</span>
+             <span class="round-note">Manche ${g.rounds.length + 1}</span>
+           </div>`;
     const card = el(`
-      <div class="game-card ${w ? "done" : "ongoing"}">
+      <div class="game-card ${g.cancelled ? "cancelled" : w ? "done" : "ongoing"}">
         <div class="meta">
-          <div class="name">${esc(g.name)}</div>
-          <div class="sub">${esc(names || "Aucun joueur")} · ${g.rounds.length} manche${g.rounds.length === 1 ? "" : "s"} · ${fmtDate(g.createdAt)}</div>
+          <div class="name">${esc(g.name)} <span class="badge badge-sm mode-${g.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(g.mode))}</span></div>
+          <div class="sub">${esc(names || "Aucun joueur")}${roundsNote}</div>
         </div>
-        ${w ? `<span class="badge rank1"><i class="fa-regular fa-trophy"></i> ${esc(w.name)}</span>` : `<span class="badge ongoing">en cours</span>`}
-        <button class="btn btn-danger btn-sm" data-del="${g.id}">Supprimer</button>
+        ${statusBadge}
       </div>`);
-    card.addEventListener("click", (e) => {
-      if (e.target.getAttribute("data-del")) return;
-      go("game", { id: g.id });
-    });
-    card.querySelector("[data-del]").addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const ok = await confirmDialog({
-        title: "Supprimer la partie ?",
-        body: `« ${g.name} » et ses scores seront définitivement supprimés.`,
-        confirmLabel: "Supprimer",
-        danger: true,
-      });
-      if (ok) { deleteGame(g.id); renderHome(); }
-    });
+    card.addEventListener("click", () => go("game", { id: g.id }));
     list.appendChild(card);
   });
   app.appendChild(list);
 }
 
 /* ---------- Shared player-list editor (used by Setup & Organiser) ---------- */
-// Renders the draggable player rows into `rowsEl`, mutating the `players`
+// Renders the reorderable player rows into `rowsEl`, mutating the `players`
 // array ({id, name}) in place. Returns the redraw function (call it after
 // pushing a new player). Identical preparation logic for both screens.
-function renderPlayerRows(rowsEl, players) {
+// Uses Pointer Events (mouse + touch) so reordering works on mobile too.
+function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
   let dragSrc = null;
+  // Autocompletion of player names already used at the current place.
+  const suggestions = placePlayerNames(getSelectedPlace());
+  const LIST_ID = "player-name-suggestions";
+
+  // Index of the row whose upper half currently contains pointer Y, i.e. the
+  // insertion target. Falls back to the last row when below every center.
+  function rowIndexAtY(y) {
+    const rows = [...rowsEl.querySelectorAll(".player-row")];
+    for (let j = 0; j < rows.length; j++) {
+      const r = rows[j].getBoundingClientRect();
+      if (y < r.top + r.height / 2) return j;
+    }
+    return rows.length - 1;
+  }
+
+  function clearHints() {
+    rowsEl
+      .querySelectorAll(".player-row")
+      .forEach((r) => r.classList.remove("drag-over", "dragging"));
+  }
+
   function draw() {
     rowsEl.innerHTML = "";
+    if (suggestions.length) {
+      rowsEl.appendChild(
+        el(
+          `<datalist id="${LIST_ID}">${suggestions.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`,
+        ),
+      );
+    }
     players.forEach((p, i) => {
       const row = el(`
-        <div class="player-row" draggable="true" data-i="${i}">
+        <div class="player-row" data-i="${i}">
           <span class="drag-handle" title="Déplacer"><i class="fa-regular fa-grip-dots-vertical"></i></span>
-          <input type="text" placeholder="Nom du joueur" value="${esc(p.name)}" />
-          <button class="btn btn-danger btn-icon" title="Retirer"><i class="fa-regular fa-xmark"></i></button>
+          <div class="player-input-wrap">
+            <input type="text" placeholder="Nom du joueur" value="${esc(p.name)}" ${suggestions.length ? `list="${LIST_ID}"` : ""} autocomplete="off" />
+            <div class="player-error" hidden></div>
+          </div>
+          ${allowRemove ? `<button class="btn btn-danger btn-icon" title="Retirer"><i class="fa-regular fa-xmark"></i></button>` : ""}
         </div>`);
       const input = row.querySelector("input");
-      input.addEventListener("input", (e) => { players[i].name = e.target.value; });
-      row.querySelector("button").addEventListener("click", () => {
-        players.splice(i, 1);
-        if (!players.length) players.push({ id: uid(), name: "" });
-        draw();
+      input.addEventListener("input", (e) => {
+        players[i].name = e.target.value;
+        revalidate(i);
       });
+      if (allowRemove) {
+        row.querySelector("button").addEventListener("click", () => {
+          players.splice(i, 1);
+          if (!players.length) players.push({ id: uid(), name: "" });
+          draw();
+        });
+      }
 
-      row.addEventListener("dragstart", (e) => {
+      const handle = row.querySelector(".drag-handle");
+      handle.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
         dragSrc = i;
-        e.dataTransfer.effectAllowed = "move";
         row.classList.add("dragging");
+        handle.setPointerCapture(e.pointerId);
       });
-      row.addEventListener("dragend", () => {
-        row.classList.remove("dragging");
-        rowsEl.querySelectorAll(".player-row").forEach((r) => r.classList.remove("drag-over"));
-      });
-      row.addEventListener("dragover", (e) => {
+      handle.addEventListener("pointermove", (e) => {
+        if (dragSrc === null) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        rowsEl.querySelectorAll(".player-row").forEach((r) => r.classList.remove("drag-over"));
-        row.classList.add("drag-over");
+        const j = rowIndexAtY(e.clientY);
+        rowsEl
+          .querySelectorAll(".player-row")
+          .forEach((r, k) =>
+            r.classList.toggle("drag-over", k === j && j !== dragSrc),
+          );
       });
-      row.addEventListener("drop", (e) => {
-        e.preventDefault();
-        if (dragSrc === null || dragSrc === i) return;
-        const moved = players.splice(dragSrc, 1)[0];
-        players.splice(i, 0, moved);
+      const finish = (e) => {
+        if (dragSrc === null) return;
+        const j = rowIndexAtY(e.clientY);
+        const src = dragSrc;
         dragSrc = null;
+        if (j !== src) {
+          const moved = players.splice(src, 1)[0];
+          players.splice(j, 0, moved);
+        }
         draw();
+      };
+      handle.addEventListener("pointerup", finish);
+      handle.addEventListener("pointercancel", () => {
+        dragSrc = null;
+        clearHints();
       });
 
       rowsEl.appendChild(row);
     });
+    revalidate(null);
   }
+
+  // Outline duplicate-name inputs in red; show a message under the row that was
+  // just edited (focusIndex), if its name collides with another.
+  function revalidate(focusIndex) {
+    const counts = {};
+    players.forEach((p) => {
+      const k = (p.name || "").trim().toLowerCase();
+      if (k) counts[k] = (counts[k] || 0) + 1;
+    });
+    [...rowsEl.querySelectorAll(".player-row")].forEach((row, idx) => {
+      const input = row.querySelector("input");
+      const errEl = row.querySelector(".player-error");
+      const k = (players[idx].name || "").trim().toLowerCase();
+      const isDup = !!k && counts[k] > 1;
+      input.classList.toggle("dup", isDup);
+      if (isDup && idx === focusIndex) {
+        errEl.textContent = "Ce joueur est déjà dans la partie";
+        errEl.hidden = false;
+      } else {
+        errEl.textContent = "";
+        errEl.hidden = true;
+      }
+    });
+  }
+
   draw();
   return draw;
 }
@@ -790,30 +1147,53 @@ function renderSetup() {
   app.innerHTML = "";
   let players = route.prefill
     ? route.prefill.map((n) => ({ id: uid(), name: n }))
-    : [{ id: uid(), name: "" }, { id: uid(), name: "" }];
+    : [
+        { id: uid(), name: "" },
+        { id: uid(), name: "" },
+      ];
+
+  const backRow = el(`
+    <div class="row">
+      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
+    </div>`);
+  backRow.querySelector("#back").addEventListener("click", () => go("home"));
+  app.appendChild(backRow);
 
   const wrap = el(`
-    <div>
-      <div class="row" style="margin-bottom:18px">
-        <button class="btn btn-ghost btn-sm" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
+    <div class="panel">
+      <h2>Nouvelle partie</h2>
+      <div class="field">
+        <label>Type de partie</label>
+        <div class="mode-tabs" id="modeTabs">
+          <button type="button" class="mode-tab" data-mode="classic">Flip 7 Classique</button>
+          <button type="button" class="mode-tab" data-mode="vengeance">Flip 7 Vengeance</button>
+        </div>
       </div>
-      ${logoMarkup()}
-      <div class="panel">
-        <h2>Nouvelle partie</h2>
-        <div class="field">
-          <label>Joueurs</label>
-          <div class="player-rows" id="rows"></div>
-          <button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>
-        </div>
-        <div class="row" style="margin-top:8px">
-          <div class="spacer"></div>
-          <button class="btn btn-primary" id="start">Commencer la partie</button>
-        </div>
+      <div class="field">
+        <label>Joueurs</label>
+        <div class="player-rows" id="rows"></div>
+        <button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>
+      </div>
+      <div class="row">
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="start">Commencer la partie</button>
       </div>
     </div>`);
+  app.appendChild(wrapPanel(wrap));
 
-  wrap.querySelector("#back").addEventListener("click", () => go("home"));
-  app.appendChild(wrap);
+  let mode = route.mode && GAME_MODES[route.mode] ? route.mode : "classic";
+  const modeTabs = wrap.querySelector("#modeTabs");
+  const syncModeTabs = () =>
+    modeTabs
+      .querySelectorAll(".mode-tab")
+      .forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  modeTabs.querySelectorAll(".mode-tab").forEach((b) =>
+    b.addEventListener("click", () => {
+      mode = b.dataset.mode;
+      syncModeTabs();
+    }),
+  );
+  syncModeTabs();
 
   const rowsEl = wrap.querySelector("#rows");
   const drawRows = renderPlayerRows(rowsEl, players);
@@ -827,6 +1207,8 @@ function renderSetup() {
   wrap.querySelector("#start").addEventListener("click", () => {
     const valid = players.filter((p) => p.name.trim());
     if (valid.length < 2) return toast("Ajoutez au moins 2 joueurs");
+    const dup = firstDuplicateName(valid.map((p) => p.name));
+    if (dup) return toast(`« ${dup} » est présent en double`);
     const place = getSelectedPlace();
     if (place === null) return toast("Ajoutez ou choisissez un lieu d'abord");
     const now = Date.now();
@@ -835,6 +1217,7 @@ function renderSetup() {
       name: gameNameFromDate(now),
       createdAt: now,
       target: DEFAULT_TARGET,
+      mode,
       place,
       players: valid.map((p) => ({ id: p.id, name: p.name.trim() })),
       rounds: [],
@@ -853,46 +1236,127 @@ function renderGame(id) {
   const st = standings(game);
   const w = winner(game);
 
+  // Show how long the game took (first → last round) once it's over.
+  const dur = w ? gameDuration(game) : null;
+  const durationChip =
+    dur != null
+      ? `<span class="target-note"><i class="fa-regular fa-clock"></i> ${fmtDuration(dur)}</span>`
+      : "";
+  // Current round indicator under the title while the game is ongoing.
+  const roundLine = w
+    ? ""
+    : `<div class="game-round">Manche ${game.rounds.length + 1}</div>`;
+
+  const backRow = el(`
+    <div class="row">
+      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
+    </div>`);
+  backRow.querySelector("#back").addEventListener("click", () => go("home"));
+  app.appendChild(backRow);
+
   const head = el(`
-    <div>
-      <div class="row" style="margin-bottom:18px">
-        <button class="btn btn-ghost btn-sm" id="back"><i class="fa-regular fa-arrow-left"></i> Toutes les parties</button>
-        <div class="spacer"></div>
-        <button class="btn btn-ghost btn-sm" id="editPlayers">Organiser</button>
-        <button class="btn btn-danger btn-sm" id="del">Supprimer la partie</button>
+    <div class="game-head">
+      <div class="game-title">
+        <div class="game-title-main">
+          <h2>${esc(game.name)}</h2>
+          <span class="badge mode-${game.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(game.mode))}</span>
+        </div>
+        ${roundLine}
       </div>
-      <div class="game-head">
-        <h2>${esc(game.name)}</h2>
-        <span class="target-note">Premier à ${game.target} pts</span>
+      ${durationChip}
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="editPlayers">Modifier</button>
+      <div class="kebab">
+        <button class="btn btn-ghost btn-sm btn-icon" id="moreBtn" aria-label="Plus d'options" aria-haspopup="true" aria-expanded="false"><i class="fa-regular fa-ellipsis"></i></button>
+        <div class="kebab-menu" id="moreMenu" hidden>
+          ${game.cancelled ? "" : `<button class="kebab-item" id="cancel"><i class="fa-regular fa-ban"></i> Annuler</button>`}
+          <button class="kebab-item" id="del"><i class="fa-regular fa-trash-can"></i> Supprimer</button>
+        </div>
       </div>
     </div>`);
-  head.querySelector("#back").addEventListener("click", () => go("home"));
-  head.querySelector("#editPlayers").addEventListener("click", () => go("editPlayers", { id: game.id }));
+  head
+    .querySelector("#editPlayers")
+    .addEventListener("click", () => go("editPlayers", { id: game.id }));
+
+  // "..." options menu (Annuler / Supprimer)
+  const moreBtn = head.querySelector("#moreBtn");
+  const moreMenu = head.querySelector("#moreMenu");
+  const closeMenu = () => {
+    moreMenu.hidden = true;
+    moreBtn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", onOutside);
+  };
+  const onOutside = (e) => {
+    if (!head.querySelector(".kebab").contains(e.target)) closeMenu();
+  };
+  moreBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = moreMenu.hidden;
+    moreMenu.hidden = !open;
+    moreBtn.setAttribute("aria-expanded", String(open));
+    if (open) document.addEventListener("click", onOutside);
+  });
+
+  const cancelBtn = head.querySelector("#cancel");
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", async () => {
+      closeMenu();
+      const ok = await confirmDialog({
+        title: "Annuler la partie ?",
+        body: "La partie sera marquée comme annulée et attribuée au joueur ayant le plus gros score.",
+        confirmLabel: "Annuler la partie",
+        cancelLabel: "Retour",
+        danger: true,
+      });
+      if (ok) {
+        const g = getGame(game.id);
+        g.cancelled = true;
+        upsertGame(g);
+        go("game", { id: game.id });
+      }
+    });
+  }
   head.querySelector("#del").addEventListener("click", async () => {
+    closeMenu();
     const ok = await confirmDialog({
       title: "Supprimer la partie ?",
       body: `« ${game.name} » et ses scores seront définitivement supprimés.`,
       confirmLabel: "Supprimer",
       danger: true,
     });
-    if (ok) { deleteGame(game.id); go("home"); }
+    if (ok) {
+      deleteGame(game.id);
+      go("home");
+    }
   });
+
   app.appendChild(head);
 
-  if (w) {
-    const banner = el(`<div class="banner">${confettiMarkup()}<span class="crown"><i class="fa-regular fa-trophy"></i></span> <b>${esc(w.name)}</b> gagne avec ${w.total} points !</div>`);
-    app.appendChild(banner);
+  const ws = winners(game);
+  if (ws.length) {
+    const names = ws.map((p) => esc(p.name)).join(", ");
+    const banner = game.cancelled
+      ? el(
+          `<div class="banner banner-cancelled"><i class="fa-regular fa-ban"></i> Partie annulée — ${ws.length > 1 ? "Vainqueurs" : "Vainqueur"} : <b>${names}</b> (${ws[0].total} pts)</div>`,
+        )
+      : el(
+          `<div class="banner">${confettiMarkup()}<span class="crown"><i class="fa-regular fa-trophy"></i></span> <b>${names}</b> gagne avec ${ws[0].total} points !</div>`,
+        );
+    app.appendChild(wrapPanel(banner));
   }
 
-  app.appendChild(buildSummary(game, st, w));
+  app.appendChild(wrapPanel(buildSummary(game, st, w)));
 
   // Hide score entry once the game is won.
   if (!w) {
+    const hasDraft = !!game.draftRound;
     const actions = el(`
       <div class="new-scores-bar">
-        <button class="btn btn-primary btn-big" id="newScores"><i class="fa-regular fa-plus"></i> Nouveaux scores</button>
+        <button class="btn btn-primary btn-big" id="newScores"><i class="fa-regular fa-${hasDraft ? "pen-to-square" : "plus"}"></i> ${hasDraft ? "Reprendre la saisie" : "Nouveaux scores"}</button>
       </div>`);
-    actions.querySelector("#newScores").addEventListener("click", () => go("entry", { id: game.id }));
+    actions
+      .querySelector("#newScores")
+      .addEventListener("click", () => openScoresDialog(game));
     app.appendChild(actions);
   }
 
@@ -900,23 +1364,39 @@ function renderGame(id) {
     <button class="link-btn" id="showDetails"><i class="fa-regular fa-clipboard-list"></i> Voir les détails</button>
     <button class="link-btn" id="newGameSamePlayers"><i class="fa-regular fa-arrows-rotate"></i> Nouvelle partie avec ces joueurs</button>
   </div>`);
-  linksWrap.querySelector("#showDetails").addEventListener("click", () => go("details", { id: game.id }));
-  linksWrap.querySelector("#newGameSamePlayers").addEventListener("click", () => go("setup", { prefill: game.players.map((p) => p.name) }));
+  linksWrap
+    .querySelector("#showDetails")
+    .addEventListener("click", () => go("details", { id: game.id }));
+  linksWrap
+    .querySelector("#newGameSamePlayers")
+    .addEventListener("click", () =>
+      go("setup", {
+        prefill: game.players.map((p) => p.name),
+        mode: game.mode,
+      }),
+    );
   app.appendChild(linksWrap);
 }
 
 // Compact scoreboard: just player + final total (ranked, winner crowned).
 function buildSummary(game, st, w) {
   const hasRounds = game.rounds.length > 0;
+  const winIds = new Set(winners(game).map((p) => p.id));
   const wrap = el(`<div class="table-wrap"></div>`);
-  const table = el(`<table class="score summary-table"><thead><tr><th class="rank-col">#</th><th class="player-name">Joueur</th><th>Total</th></tr></thead></table>`);
+  const table = el(
+    `<table class="score summary-table"><thead><tr><th class="rank-col">#</th><th class="player-name">Joueur</th><th>Total</th></tr></thead></table>`,
+  );
   const tbody = el(`<tbody></tbody>`);
   st.forEach((p, i) => {
     const rank = i + 1;
-    const won = w && w.id === p.id;
-    const crown = won ? '<span class="crown"><i class="fa-regular fa-crown"></i></span>' : "";
+    const won = winIds.has(p.id);
+    const crown = won
+      ? '<span class="crown"><i class="fa-regular fa-crown"></i></span>'
+      : "";
     const rankClass = `rank${rank}`;
-    const rankBadge = hasRounds ? `<span class="badge ${rankClass}">${rank}</span>` : "";
+    const rankBadge = hasRounds
+      ? `<span class="badge ${rankClass}">${rank}</span>`
+      : "";
     const tr = el(`
       <tr class="${won ? "winner-row" : ""}">
         <td class="rank-col">${rankBadge}</td>
@@ -939,56 +1419,76 @@ function renderDetails(id) {
   const st = standings(game);
   const w = winner(game);
   const rankMap = {};
-  st.forEach((p, i) => { rankMap[p.id] = i + 1; });
+  st.forEach((p, i) => {
+    rankMap[p.id] = i + 1;
+  });
 
-  const head = el(`
-    <div>
-      <div class="row" style="margin-bottom:18px">
-        <button class="btn btn-ghost btn-sm" id="back"><i class="fa-regular fa-arrow-left"></i> Retour au tableau</button>
-      </div>
+  const backRow = el(`
+    <div class="row">
+      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
+    </div>`);
+  backRow
+    .querySelector("#back")
+    .addEventListener("click", () => go("game", { id: game.id }));
+  app.appendChild(backRow);
+
+  app.appendChild(
+    el(`
       <div class="game-head">
         <h2>Détails des scores</h2>
+        <span class="badge mode-${game.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(game.mode))}</span>
         <span class="target-note">${esc(game.name)}</span>
-      </div>
-    </div>`);
-  head.querySelector("#back").addEventListener("click", () => go("game", { id: game.id }));
-  app.appendChild(head);
+      </div>`),
+  );
 
-  app.appendChild(buildTable(game, rankMap, w));
+  app.appendChild(wrapPanel(buildTable(game, rankMap, w)));
 }
 
 function buildTable(game, rankMap, w) {
   const hasRounds = game.rounds.length > 0;
+  const winIds = new Set(winners(game).map((p) => p.id));
   const wrap = el(`<div class="table-wrap"></div>`);
   const table = el(`<table class="score"></table>`);
 
   // head
   let thead = `<thead><tr><th class="rank-col">#</th><th class="player-name">Joueur</th>`;
-  game.rounds.forEach((_, i) => { thead += `<th>M${i + 1}</th>`; });
+  game.rounds.forEach((_, i) => {
+    thead += `<th>M${i + 1}</th>`;
+  });
   thead += `<th>Total</th></tr></thead>`;
   table.innerHTML = thead;
 
   // body — rows ordered by rank (same as the other screens)
   const tbody = el(`<tbody></tbody>`);
-  const orderedPlayers = [...game.players].sort((a, b) => rankMap[a.id] - rankMap[b.id]);
+  const orderedPlayers = [...game.players].sort(
+    (a, b) => rankMap[a.id] - rankMap[b.id],
+  );
   orderedPlayers.forEach((p) => {
     const total = playerTotal(game, p.id);
     const rank = rankMap[p.id];
-    const won = w && w.id === p.id;
-    const rankBadge = hasRounds ? `<span class="badge rank${rank}">${rank}</span>` : "";
-    const tr = el(`<tr class="${won ? "winner-row" : ""}"><td class="rank-col">${rankBadge}</td><td class="player-name">${esc(p.name)}</td></tr>`);
+    const won = winIds.has(p.id);
+    const rankBadge = hasRounds
+      ? `<span class="badge rank${rank}">${rank}</span>`
+      : "";
+    const tr = el(
+      `<tr class="${won ? "winner-row" : ""}"><td class="rank-col">${rankBadge}</td><td class="player-name">${esc(p.name)}</td></tr>`,
+    );
 
     game.rounds.forEach((r, ri) => {
       const cell = r.scores[p.id] || { points: 0, flip7: false, bust: false };
       const td = el(`<td></td>`);
       const tags = `${cell.flip7 ? '<span class="flip7-tag">+15</span>' : ""}`;
       td.innerHTML = `
-        <span class="cell-box"><input type="number" class="cell-input" value="${cell.bust ? 0 : (Number(cell.points) || 0)}" ${cell.bust ? "disabled" : ""} />${tags}</span>`;
+        <span class="cell-box"><input type="number" class="cell-input" value="${cell.bust ? 0 : Number(cell.points) || 0}" ${cell.bust ? "disabled" : ""} />${tags}</span>`;
       const input = td.querySelector("input");
       input.addEventListener("change", (e) => {
         const g = getGame(game.id);
         const beforeWinnerId = (winner(g) || {}).id || null;
-        const c = g.rounds[ri].scores[p.id] || { points: 0, flip7: false, bust: false };
+        const c = g.rounds[ri].scores[p.id] || {
+          points: 0,
+          flip7: false,
+          bust: false,
+        };
         c.points = Number(e.target.value) || 0;
         g.rounds[ri].scores[p.id] = c;
         upsertGame(g);
@@ -998,9 +1498,13 @@ function buildTable(game, rankMap, w) {
       tr.appendChild(td);
     });
 
-    const crown = won ? '<span class="crown"><i class="fa-regular fa-crown"></i></span>' : "";
+    const crown = won
+      ? '<span class="crown"><i class="fa-regular fa-crown"></i></span>'
+      : "";
     const rankClass = `rank${rank}`;
-    const totalTd = el(`<td class="total-cell"><span class="score-badge ${rankClass}">${total}${crown}</span></td>`);
+    const totalTd = el(
+      `<td class="total-cell"><span class="score-badge ${rankClass}">${total}${crown}</span></td>`,
+    );
     tr.appendChild(totalTd);
     tbody.appendChild(tr);
   });
@@ -1009,7 +1513,9 @@ function buildTable(game, rankMap, w) {
   // footer: round delete buttons
   if (game.rounds.length) {
     let cells = `<td class="rank-col"></td><td class="player-name muted">Retirer</td>`;
-    game.rounds.forEach((_, i) => { cells += `<td><button class="btn btn-danger btn-icon" data-delround="${i}" title="Supprimer la manche"><i class="fa-regular fa-xmark"></i></button></td>`; });
+    game.rounds.forEach((_, i) => {
+      cells += `<td><button class="btn btn-danger btn-icon" data-delround="${i}" title="Supprimer la manche"><i class="fa-regular fa-xmark"></i></button></td>`;
+    });
     cells += `<td></td>`;
     const tf = el(`<tfoot><tr>${cells}</tr></tfoot>`);
     table.appendChild(tf);
@@ -1046,7 +1552,9 @@ function buildRoundEntry(game) {
         <button class="btn btn-primary" id="saveRound">Enregistrer la manche</button>
       </div>
     </div>`);
-  section.querySelector("#cancelRound").addEventListener("click", () => go("game", { id: game.id }));
+  section
+    .querySelector("#cancelRound")
+    .addEventListener("click", () => go("game", { id: game.id }));
 
   const grid = section.querySelector("#entryGrid");
   // draft holds entry state per player
@@ -1066,7 +1574,9 @@ function buildRoundEntry(game) {
     const flipBtn = row.querySelector(".flip7-btn");
     const bustBtn = row.querySelector(".bust-btn");
 
-    numInput.addEventListener("input", (e) => { draft[p.id].points = e.target.value; });
+    numInput.addEventListener("input", (e) => {
+      draft[p.id].points = e.target.value;
+    });
     flipBtn.addEventListener("click", () => {
       if (draft[p.id].bust) return;
       draft[p.id].flip7 = !draft[p.id].flip7;
@@ -1080,7 +1590,8 @@ function buildRoundEntry(game) {
       numInput.disabled = draft[p.id].bust;
       flipBtn.disabled = draft[p.id].bust;
       if (draft[p.id].bust) {
-        numInput.value = ""; draft[p.id].flip7 = false;
+        numInput.value = "";
+        draft[p.id].flip7 = false;
         flipBtn.classList.remove("active");
         row.classList.remove("flipped");
       }
@@ -1093,14 +1604,14 @@ function buildRoundEntry(game) {
     game.players.forEach((p) => {
       const d = draft[p.id];
       scores[p.id] = {
-        points: d.bust ? 0 : (Number(d.points) || 0),
+        points: d.bust ? 0 : Number(d.points) || 0,
         flip7: d.bust ? false : !!d.flip7,
         bust: !!d.bust,
       };
     });
     const g = getGame(game.id);
     const beforeWinnerId = (winner(g) || {}).id || null;
-    g.rounds.push({ scores });
+    g.rounds.push({ scores, at: Date.now() });
     upsertGame(g);
     toast(`Manche ${g.rounds.length} enregistrée`);
     go("game", { id: game.id });
@@ -1110,6 +1621,121 @@ function buildRoundEntry(game) {
   return section;
 }
 
+// Score entry in a dialog. The in-progress round can be "pre-saved" to
+// game.draftRound so closing/reopening keeps the state untouched.
+function openScoresDialog(game) {
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
+
+  const saved = game.draftRound || {};
+  const draft = {};
+
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>Manche ${game.rounds.length + 1}</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body"><div class="entry-grid" id="entryGrid"></div></div>
+    <div class="scores-dialog-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" id="cancelRound">Annuler</button>
+      <button class="btn btn-primary" id="saveRound">Enregistrer la manche</button>
+    </div>`;
+
+  const grid = modal.querySelector("#entryGrid");
+  game.players.forEach((p) => {
+    const s = saved[p.id] || {};
+    draft[p.id] = {
+      points: s.points != null && s.points !== "" ? String(s.points) : "",
+      flip7: !!s.flip7,
+      bust: !!s.bust,
+    };
+    const d = draft[p.id];
+    const row = el(`
+      <div class="entry-player ${d.bust ? "busted" : d.flip7 ? "flipped" : ""}">
+        <span class="pname">${esc(p.name)}</span>
+        <div class="entry-controls">
+          <input type="number" class="cell-input" placeholder="0" min="0" value="${d.bust ? "" : esc(d.points)}" ${d.bust ? "disabled" : ""} />
+          <button type="button" class="btn btn-ghost btn-sm flip7-btn ${d.flip7 ? "active" : ""}" ${d.bust ? "disabled" : ""}><i class="fa-regular fa-star"></i> Flip 7 (+${FLIP7_BONUS})</button>
+          <button type="button" class="btn btn-ghost btn-sm bust-btn ${d.bust ? "active" : ""}">Éliminé</button>
+        </div>
+      </div>`);
+    const numInput = row.querySelector('input[type="number"]');
+    const flipBtn = row.querySelector(".flip7-btn");
+    const bustBtn = row.querySelector(".bust-btn");
+
+    numInput.addEventListener("input", (e) => {
+      draft[p.id].points = e.target.value;
+    });
+    flipBtn.addEventListener("click", () => {
+      if (draft[p.id].bust) return;
+      draft[p.id].flip7 = !draft[p.id].flip7;
+      flipBtn.classList.toggle("active", draft[p.id].flip7);
+      row.classList.toggle("flipped", draft[p.id].flip7);
+    });
+    bustBtn.addEventListener("click", () => {
+      draft[p.id].bust = !draft[p.id].bust;
+      bustBtn.classList.toggle("active", draft[p.id].bust);
+      row.classList.toggle("busted", draft[p.id].bust);
+      numInput.disabled = draft[p.id].bust;
+      flipBtn.disabled = draft[p.id].bust;
+      if (draft[p.id].bust) {
+        numInput.value = "";
+        draft[p.id].flip7 = false;
+        flipBtn.classList.remove("active");
+        row.classList.remove("flipped");
+      }
+    });
+    grid.appendChild(row);
+  });
+
+  // Leaving the dialog (×, Annuler, click outside) pre-saves the in-progress
+  // round so it can be resumed later. Empty drafts clear any saved one.
+  const hasData = () =>
+    Object.values(draft).some(
+      (d) => (d.points !== "" && d.points != null) || d.flip7 || d.bust,
+    );
+  const closeKeepingDraft = () => {
+    const g = getGame(game.id);
+    g.draftRound = hasData() ? JSON.parse(JSON.stringify(draft)) : null;
+    upsertGame(g);
+    overlay.remove();
+    if (route.name === "game" && route.id === game.id) go("game", { id: game.id });
+  };
+  modal
+    .querySelector("[data-act=close]")
+    .addEventListener("click", closeKeepingDraft);
+  modal.querySelector("#cancelRound").addEventListener("click", closeKeepingDraft);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeKeepingDraft();
+  });
+
+  modal.querySelector("#saveRound").addEventListener("click", () => {
+    const scores = {};
+    game.players.forEach((p) => {
+      const d2 = draft[p.id];
+      scores[p.id] = {
+        points: d2.bust ? 0 : Number(d2.points) || 0,
+        flip7: d2.bust ? false : !!d2.flip7,
+        bust: !!d2.bust,
+      };
+    });
+    const g = getGame(game.id);
+    const beforeWinnerId = (winner(g) || {}).id || null;
+    g.rounds.push({ scores, at: Date.now() });
+    g.draftRound = null; // round committed — clear the draft
+    upsertGame(g);
+    overlay.remove();
+    toast(`Manche ${g.rounds.length} enregistrée`);
+    go("game", { id: game.id });
+    celebrateIfNewWinner(beforeWinnerId, g);
+  });
+
+  root.appendChild(overlay);
+}
+
 /* ---------- Edit Players ---------- */
 function renderEditPlayers(id) {
   const game = getGame(id);
@@ -1117,47 +1743,89 @@ function renderEditPlayers(id) {
   app.innerHTML = "";
 
   let players = game.players.map((p) => ({ ...p }));
+  // A finished or cancelled game keeps its roster fixed — no add/remove.
+  const locked = !!winner(game);
+
+  const backRow = el(`
+    <div class="row">
+      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
+    </div>`);
+  backRow.querySelector("#back").addEventListener("click", () => go("game", { id }));
+  app.appendChild(backRow);
+
+  app.appendChild(
+    el(`
+      <div class="game-head">
+        <div class="game-title">
+          <div class="game-title-main">
+            <h2>${esc(game.name)}</h2>
+            <span class="badge mode-${game.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(game.mode))}</span>
+          </div>
+        </div>
+      </div>`),
+  );
 
   const wrap = el(`
-    <div>
-      <div class="row" style="margin-bottom:18px">
-        <button class="btn btn-ghost btn-sm" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
-      </div>
-      <div class="game-head">
-        <h2><i class="fa-regular fa-user"></i> Modifier les joueurs</h2>
-        <span class="target-note">${esc(game.name)}</span>
-      </div>
-      <div class="panel">
-        <div class="field">
-          <label>Joueurs</label>
-          <div class="player-rows" id="rows"></div>
-          <button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>
+    <div class="panel">
+      <div class="field">
+        <label>Type de partie</label>
+        <div class="mode-tabs" id="modeTabs">
+          <button type="button" class="mode-tab" data-mode="classic">Flip 7 Classique</button>
+          <button type="button" class="mode-tab" data-mode="vengeance">Flip 7 Vengeance</button>
         </div>
-        <div class="row" style="margin-top:8px">
-          <div class="spacer"></div>
-          <button class="btn btn-primary" id="save">Enregistrer</button>
-        </div>
+      </div>
+      <div class="field">
+        <label>Joueurs</label>
+        <div class="player-rows" id="rows"></div>
+        ${locked ? "" : `<button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>`}
+      </div>
+      <div class="row">
+        <div class="spacer"></div>
+        <button class="btn btn-ghost" id="cancelEdit">Annuler</button>
+        <button class="btn btn-primary" id="save">Enregistrer</button>
       </div>
     </div>`);
+  const panelWrap = el(`<div class="panel-wrap"></div>`);
+  panelWrap.appendChild(wrap);
+  app.appendChild(panelWrap);
 
-  wrap.querySelector("#back").addEventListener("click", () => go("game", { id }));
-  app.appendChild(wrap);
+  wrap.querySelector("#cancelEdit").addEventListener("click", () => go("game", { id }));
+
+  let mode = GAME_MODES[game.mode] ? game.mode : "classic";
+  const modeTabs = wrap.querySelector("#modeTabs");
+  const syncModeTabs = () =>
+    modeTabs
+      .querySelectorAll(".mode-tab")
+      .forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  modeTabs.querySelectorAll(".mode-tab").forEach((b) =>
+    b.addEventListener("click", () => {
+      mode = b.dataset.mode;
+      syncModeTabs();
+    }),
+  );
+  syncModeTabs();
 
   const rowsEl = wrap.querySelector("#rows");
 
-  const drawRows = renderPlayerRows(rowsEl, players);
+  const drawRows = renderPlayerRows(rowsEl, players, { allowRemove: !locked });
 
-  wrap.querySelector("#addPlayer").addEventListener("click", () => {
-    players.push({ id: uid(), name: "" });
-    drawRows();
-    rowsEl.querySelector(".player-row:last-child input").focus();
-  });
+  const addBtn = wrap.querySelector("#addPlayer");
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
+      players.push({ id: uid(), name: "" });
+      drawRows();
+      rowsEl.querySelector(".player-row:last-child input").focus();
+    });
+  }
 
   wrap.querySelector("#save").addEventListener("click", () => {
     const valid = players.filter((p) => p.name.trim());
     if (valid.length < 2) return toast("Au moins 2 joueurs requis");
+    const dup = firstDuplicateName(valid.map((p) => p.name));
+    if (dup) return toast(`« ${dup} » est présent en double`);
     const g = getGame(id);
     g.players = valid.map((p) => ({ id: p.id, name: p.name.trim() }));
+    g.mode = mode;
     upsertGame(g);
     go("game", { id });
   });
@@ -1170,25 +1838,39 @@ function renderEntry(id) {
   if (winner(game)) return go("game", { id }); // game is over — no new scores
   app.innerHTML = "";
 
-  const head = el(`
-    <div>
-      <div class="row" style="margin-bottom:18px">
-        <button class="btn btn-ghost btn-sm" id="back"><i class="fa-regular fa-arrow-left"></i> Retour aux scores</button>
-      </div>
-      <div class="game-head">
-        <h2>Nouveaux scores</h2>
-        <span class="target-note">${esc(game.name)}</span>
-      </div>
+  const backRow = el(`
+    <div class="row">
+      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
     </div>`);
-  head.querySelector("#back").addEventListener("click", () => go("game", { id: game.id }));
-  app.appendChild(head);
+  backRow
+    .querySelector("#back")
+    .addEventListener("click", () => go("game", { id: game.id }));
+  app.appendChild(backRow);
 
-  app.appendChild(buildRoundEntry(game));
+  app.appendChild(
+    el(`
+      <div class="game-head">
+        <div class="game-title">
+          <div class="game-title-main">
+            <h2>${esc(game.name)}</h2>
+            <span class="badge mode-${game.mode === "vengeance" ? "vengeance" : "classic"}">${esc(modeLabel(game.mode))}</span>
+          </div>
+        </div>
+      </div>`),
+  );
+
+  app.appendChild(wrapPanel(buildRoundEntry(game)));
 }
 
 /* ---------- Stats (per place, keyed by player name) ---------- */
-function computeStats(place) {
-  const games = gamesForPlace(place);
+// `mode` filters the games considered: "all" | "classic" | "vengeance".
+// Legacy games without a stored mode count as classic.
+function computeStats(place, mode = "all") {
+  let games = gamesForPlace(place);
+  if (mode === "classic")
+    games = games.filter((g) => (g.mode || "classic") === "classic");
+  else if (mode === "vengeance")
+    games = games.filter((g) => g.mode === "vengeance");
   const map = {}; // key: lowercased trimmed name -> aggregate
   games.forEach((g) => {
     const w = winner(g);
@@ -1206,7 +1888,7 @@ function computeStats(place) {
     }
   });
   return Object.values(map).sort(
-    (a, b) => b.wins - a.wins || b.points - a.points || b.games - a.games
+    (a, b) => b.wins - a.wins || b.points - a.points || b.games - a.games,
   );
 }
 
@@ -1214,67 +1896,102 @@ function renderStats() {
   app.innerHTML = "";
 
   const place = getSelectedPlace();
-  const stats = computeStats(place);
 
-  const head = el(`
-    <div>
-      <div class="row" style="margin-bottom:18px">
-        <button class="btn btn-ghost btn-sm" id="back"><i class="fa-regular fa-arrow-left"></i> Accueil</button>
-      </div>
-      <div class="game-head">
-        <h2><i class="fa-regular fa-chart-simple"></i> Statistiques</h2>
-        <span class="target-note"><i class="fa-regular fa-location-dot"></i> ${esc(placeLabel(place))} · ${stats.length} joueur${stats.length === 1 ? "" : "s"}</span>
-      </div>
+  app.appendChild(navTabs("stats"));
+
+  // Version filter, styled like the games-list date filter (segmented).
+  const VERSIONS = [
+    { key: "all", label: "Général" },
+    { key: "classic", label: "Classique" },
+    { key: "vengeance", label: "Vengeance" },
+  ];
+  let statMode = "all";
+  const controls = el(`
+    <div class="date-filter" id="versionFilter">
+      ${VERSIONS.map((v) => `<button type="button" data-v="${v.key}" class="${v.key === statMode ? "active" : ""}">${v.label}</button>`).join("")}
     </div>`);
-  head.querySelector("#back").addEventListener("click", () => go("home"));
-  app.appendChild(head);
+  const versionBtns = controls.querySelectorAll("button");
+  versionBtns.forEach((b) =>
+    b.addEventListener("click", () => {
+      statMode = b.dataset.v;
+      versionBtns.forEach((x) =>
+        x.classList.toggle("active", x.dataset.v === statMode),
+      );
+      draw(statMode);
+    }),
+  );
+  app.appendChild(controls);
 
-  if (!stats.length) {
-    app.appendChild(el(`<div class="empty">Aucune donnée pour « ${esc(placeLabel(place))} ». Jouez une partie pour voir les statistiques.</div>`));
-    return;
+  const content = el(`<div id="statsContent"></div>`);
+  app.appendChild(content);
+
+  function draw(mode) {
+    content.innerHTML = "";
+    const stats = computeStats(place, mode);
+    if (!stats.length) {
+      const modeTxt =
+        mode === "all"
+          ? ""
+          : ` en ${mode === "classic" ? "Classique" : "Vengeance"}`;
+      content.appendChild(
+        el(
+          `<div class="empty">Aucune donnée pour « ${esc(placeLabel(place))} »${modeTxt}. Jouez une partie pour voir les statistiques.</div>`,
+        ),
+      );
+      return;
+    }
+
+    const wrap = el(`<div class="table-wrap"></div>`);
+    const table = el(`
+      <table class="score stats-table">
+        <thead><tr>
+          <th class="rank-col">#</th>
+          <th class="player-name">Joueur</th>
+          <th>Parties jouées</th>
+          <th>Points totaux</th>
+          <th>Victoires</th>
+        </tr></thead>
+      </table>`);
+    const tbody = el(`<tbody></tbody>`);
+    stats.forEach((s, i) => {
+      const rank = i + 1;
+      const rankClass = `rank${rank}`;
+      const tr = el(`
+        <tr class="${rank === 1 ? "winner-row" : ""}">
+          <td class="rank-col"><span class="badge ${rankClass}">${rank}</span></td>
+          <td class="player-name">${esc(s.name)}</td>
+          <td>${s.games}</td>
+          <td>${s.points}</td>
+          <td class="total-cell"><span class="score-badge ${rankClass}">${s.wins}</span></td>
+        </tr>`);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    content.appendChild(wrap);
   }
 
-  const wrap = el(`<div class="table-wrap"></div>`);
-  const table = el(`
-    <table class="score stats-table">
-      <thead><tr>
-        <th class="rank-col">#</th>
-        <th class="player-name">Joueur</th>
-        <th>Parties jouées</th>
-        <th>Points totaux</th>
-        <th>Victoires</th>
-      </tr></thead>
-    </table>`);
-  const tbody = el(`<tbody></tbody>`);
-  stats.forEach((s, i) => {
-    const rank = i + 1;
-    const rankClass = `rank${rank}`;
-    const tr = el(`
-      <tr class="${rank === 1 ? "winner-row" : ""}">
-        <td class="rank-col"><span class="badge ${rankClass}">${rank}</span></td>
-        <td class="player-name">${esc(s.name)}</td>
-        <td>${s.games}</td>
-        <td>${s.points}</td>
-        <td class="total-cell"><span class="score-badge ${rankClass}">${s.wins}</span></td>
-      </tr>`);
-    tbody.appendChild(tr);
-  });
-  table.appendChild(tbody);
-  wrap.appendChild(table);
-  app.appendChild(wrap);
+  draw(statMode);
 }
 
 /* ---------- disable zoom (pinch / ctrl+wheel / ctrl +/-) ---------- */
 (function preventZoom() {
   // trackpad pinch + ctrl+wheel zoom
-  window.addEventListener("wheel", (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+  window.addEventListener(
+    "wheel",
+    (e) => {
+      if (e.ctrlKey) e.preventDefault();
+    },
+    { passive: false },
+  );
   // keyboard zoom: ctrl/cmd + (+, -, =, 0)
   window.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && ["+", "-", "=", "0"].includes(e.key)) e.preventDefault();
+    if ((e.ctrlKey || e.metaKey) && ["+", "-", "=", "0"].includes(e.key))
+      e.preventDefault();
   });
   // iOS Safari pinch gestures
   ["gesturestart", "gesturechange", "gestureend"].forEach((evt) =>
-    document.addEventListener(evt, (e) => e.preventDefault())
+    document.addEventListener(evt, (e) => e.preventDefault()),
   );
 })();
 
@@ -1282,6 +1999,15 @@ function renderStats() {
 (async function boot() {
   app.innerHTML = `<div class="empty">Chargement…</div>`;
   await fetchGames();
-  route = location.hash ? hashToRoute(location.hash) : { name: "place" };
-  render();
+  if (location.hash) {
+    selectPlaceFromHash(location.hash);
+    route = hashToRoute(location.hash);
+    render();
+  } else if (getSelectedPlace() !== null) {
+    // No deep-link but a place is known: go home and reflect it in the URL.
+    go("home");
+  } else {
+    route = { name: "place" };
+    render();
+  }
 })();

@@ -33,6 +33,7 @@ create policy "Public delete" on public.games for delete using (true);
 ## 3. Récupérer les clés
 
 Menu **Project Settings** (roue dentée) → **API** :
+
 - **Project URL** → copier
 - **Project API keys** → la clé **`anon` / `public`** → copier
 
@@ -42,8 +43,8 @@ Ouvrir `config.js` et remplacer les deux valeurs :
 
 ```js
 window.FLIP7_CONFIG = {
-  url: "https://xxxxxxxxxxxx.supabase.co",   // Project URL
-  anonKey: "eyJhbGciOiJI...",                // clé anon / public
+  url: "https://xxxxxxxxxxxx.supabase.co", // Project URL
+  anonKey: "eyJhbGciOiJI...", // clé anon / public
 };
 ```
 
@@ -55,9 +56,12 @@ Recharger la page : la console doit ne plus afficher l'avertissement
 Sur la page de l'app (après l'étape 4), ouvrir la console du navigateur et coller :
 
 ```js
-JSON.parse(localStorage.getItem('flip7_games') || '[]')
-  .forEach(g => db.from('games').upsert({ id: g.id, data: g })
-    .then(({ error }) => console.log(g.name, error ? error.message : 'OK')));
+JSON.parse(localStorage.getItem("flip7_games") || "[]").forEach((g) =>
+  db
+    .from("games")
+    .upsert({ id: g.id, data: g })
+    .then(({ error }) => console.log(g.name, error ? error.message : "OK")),
+);
 ```
 
 Recharger : les parties locales sont maintenant dans Supabase, partagées partout.
