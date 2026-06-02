@@ -14,5 +14,6 @@
  */
 window.FLIP7_CONFIG = {
   url: "https://wpplikcgqfqftsuubbmy.supabase.co",
-  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwcGxpa2NncWZxZnRzdXViYm15Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTAwNjgsImV4cCI6MjA5NTgyNjA2OH0.Oy51qbfDRctz-YFxvfPqrf0iLEF1m1Y6p574_4Fijgs",
+  anonKey:
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwcGxpa2NncWZxZnRzdXViYm15Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTAwNjgsImV4cCI6MjA5NTgyNjA2OH0.Oy51qbfDRctz-YFxvfPqrf0iLEF1m1Y6p574_4Fijgs",
 };
