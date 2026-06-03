@@ -36,6 +36,11 @@
   --skyjo-dark: #3a8a5c; /* darker stop / border */
   --skyjo-glow: rgba(81, 180, 124, 0.45);
 
+  /* Time's Up! accent (yellow — needs dark text) */
+  --timesup: #fcdd0b; /* lighter gradient stop / base */
+  --timesup-dark: #d4b800; /* darker stop / border */
+  --timesup-glow: rgba(252, 221, 11, 0.45);
+
   --surface: #eff8f7; /* page bg */
   --card: #ffffff; /* card bg */
 
@@ -681,11 +686,10 @@ input:focus {
   width: 100%;
 }
 /* custom name autocompletion dropdown (reliable on mobile, unlike <datalist>).
-   Portalled to <body> with fixed positioning (JS sets left/top/width) so it
-   floats above dialogs instead of being clipped by their overflow:hidden. */
+   In-flow under the input so it scrolls with the dialog body and stays put when
+   the mobile keyboard resizes the viewport (no position:fixed drift). */
 .name-suggest {
-  position: fixed;
-  z-index: 40;
+  margin-top: 0.25rem;
   background: var(--card);
   border: 2px solid var(--teal-light);
   border-radius: var(--r-md);
@@ -819,6 +823,12 @@ input:focus {
   border-color: var(--skyjo-dark);
   box-shadow: 0 2px 12px var(--skyjo-glow);
 }
+.rules-tab.active[data-tab="timesup"] {
+  background: linear-gradient(135deg, var(--timesup), var(--timesup-dark));
+  border-color: var(--timesup-dark);
+  box-shadow: 0 2px 12px var(--timesup-glow);
+  color: var(--ink);
+}
 
 /* top navigation tabs (Home / Stats) — filled pill for the active tab */
 .nav-tabs {
@@ -939,6 +949,12 @@ input:focus {
   border-color: var(--skyjo-dark);
   box-shadow: 0 2px 12px var(--skyjo-glow);
 }
+#versionFilter button.active[data-v="timesup"] {
+  background: linear-gradient(135deg, var(--timesup), var(--timesup-dark));
+  border-color: var(--timesup-dark);
+  box-shadow: 0 2px 12px var(--timesup-glow);
+  color: var(--ink);
+}
 
 /* game-mode selector (Setup) — same look as the rules tabs */
 .mode-tabs {
@@ -986,6 +1002,12 @@ input:focus {
   border-color: var(--skyjo-dark);
   box-shadow: 0 2px 12px var(--skyjo-glow);
 }
+.mode-tab.active[data-mode="timesup"] {
+  background: linear-gradient(135deg, var(--timesup), var(--timesup-dark));
+  border-color: var(--timesup-dark);
+  box-shadow: 0 2px 12px var(--timesup-glow);
+  color: var(--ink);
+}
 .badge.mode-classic {
   background: linear-gradient(135deg, var(--classic), var(--classic-dark));
   color: #fff;
@@ -997,6 +1019,10 @@ input:focus {
 .badge.mode-skyjo {
   background: linear-gradient(135deg, var(--skyjo), var(--skyjo-dark));
   color: #fff;
+}
+.badge.mode-timesup {
+  background: linear-gradient(135deg, var(--timesup), var(--timesup-dark));
+  color: var(--ink);
 }
 
 /* rules page */
