@@ -538,6 +538,7 @@ input:focus {
 
 .game-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* let cards shrink instead of widening the grid */
   gap: 1rem 0.5rem;
 }
 .game-card {
@@ -575,9 +576,19 @@ input:focus {
   display: flex;
   align-items: center;
   gap: 1rem 0.5rem;
+  min-width: 0;
   font-weight: 800;
   font-size: 1.125rem;
   color: var(--teal-dark);
+}
+.game-card .name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-card .name .badge {
+  flex-shrink: 0;
 }
 .game-card .sub {
   color: var(--muted);
@@ -955,6 +966,34 @@ input:focus {
   box-shadow: 0 2px 12px var(--timesup-glow);
   color: var(--ink);
 }
+.stat-metric-select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  width: 100%;
+  max-width: 100%;
+  border: 2px solid var(--teal-light);
+  background: var(--card);
+  color: var(--teal-dark);
+  font-weight: 800;
+  font-size: 0.9375rem;
+  border-radius: var(--r-round);
+  padding: 0.625rem 2.5rem 0.625rem 1rem;
+  box-shadow: var(--shadow-sm);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%231e8c86'%3E%3Cpath d='M4.5 6l3.5 3.5L11.5 6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.875rem center;
+  background-size: 1rem;
+  transition: filter 0.15s ease;
+}
+.stat-metric-select:hover {
+  filter: brightness(1.04);
+}
+.stat-metric-select:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: var(--shadow-teal-glow);
+}
 
 /* game-mode selector (Setup) — same look as the rules tabs */
 .mode-tabs {
@@ -1076,9 +1115,36 @@ input:focus {
   display: flex;
   align-items: center;
   gap: 1rem 0.5rem;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+/* the title shrinks (and ellipsises) so the type badge stays on the same line */
+.game-title-main h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-title-main .badge {
+  flex-shrink: 0;
+}
+/* Game screen header: title row on top, meta row (rounds, timer, actions)
+   stacked below. */
+.game-head-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap; /* column-wrap would size to the title's content width */
+  gap: 0.5rem;
+  min-width: 0; /* allow the title row to shrink instead of overflowing */
+}
+.game-meta-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
   flex-wrap: wrap;
 }
-.game-round {
+.game-round-num {
   color: var(--muted);
   font-size: 0.875rem;
   font-weight: 700;
@@ -1152,11 +1218,35 @@ input:focus {
 .kebab-item:hover {
   background: var(--teal-bg);
 }
+.kebab-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.kebab-item:disabled:hover {
+  background: transparent;
+}
 .kebab-item#del {
   color: var(--coral-dark);
 }
 .kebab-item#del:hover {
   background: rgba(239, 108, 74, 0.12);
+}
+/* "Modifier" lives in the standalone button by default; below 430px it folds
+   into the "..." menu instead. */
+.kebab-edit {
+  display: none;
+}
+@media (max-width: 430px) {
+  .game-meta-row #editPlayers {
+    display: none;
+  }
+  /* the standalone button carried ml-auto; once hidden, the "..." takes over */
+  .game-meta-row .kebab {
+    margin-left: auto;
+  }
+  .kebab-edit {
+    display: inline-flex;
+  }
 }
 
 .banner.banner-cancelled {
@@ -1227,6 +1317,15 @@ input.cell-input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
+/* zero-value cell: editable, but visually muted like a disabled field */
+input.cell-input.cell-zero {
+  color: var(--muted);
+  opacity: 0.55;
+}
+input.cell-input.cell-zero:focus {
+  color: var(--text);
+  opacity: 1;
+}
 .flip7-tag {
   position: absolute;
   top: -0.5rem;
@@ -1245,6 +1344,10 @@ input.cell-input::-webkit-inner-spin-button {
   font-size: 1.25rem;
   color: var(--text);
 }
+/* Game scoreboard: larger totals for at-a-glance reading (no colour change). */
+table.score.summary-table .total-cell {
+  font-size: 2rem;
+}
 .score-badge {
   display: inline-flex;
   align-items: center;
@@ -1254,14 +1357,52 @@ input.cell-input::-webkit-inner-spin-button {
 }
 /* projected total from an in-progress (pre-saved) round */
 .score-preview {
-  margin-left: 0.375rem;
-  color: var(--muted);
-  font-size: 0.875rem;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: var(--teal-bg);
+  color: var(--teal-dark, var(--text));
+  font-size: 0.9rem;
+  font-weight: 800;
   white-space: nowrap;
+  vertical-align: middle;
+}
+.score-preview .fa-arrow-right-long {
+  opacity: 0.6;
+  font-size: 0.8em;
 }
 .score-preview .crown {
   color: var(--gold-dark);
+}
+/* eliminated player in the in-progress round */
+.elim-tag {
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: var(--coral);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  vertical-align: middle;
+  box-shadow: var(--shadow-coral-glow);
+}
+table.score .eliminated-row .player-name {
+  color: var(--coral-dark);
+  text-decoration: line-through;
+  text-decoration-color: rgba(212, 82, 51, 0.5);
+  background: rgba(239, 108, 74, 0.16);
+}
+.eliminated-row .total-cell .score-badge {
+  color: var(--coral-dark);
+  opacity: 0.7;
+}
+.eliminated-row td {
+  background: rgba(239, 108, 74, 0.16);
 }
 .rank-col {
   width: 1px;
