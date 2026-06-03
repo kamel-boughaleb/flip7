@@ -361,6 +361,13 @@ function winnersFromStandings(game, s) {
 function winners(game) {
   return winnersFromStandings(game, standings(game));
 }
+// Label for a list of winners: names joined by commas, the last one with "&"
+// (e.g. "Lucas, Léna & Cindy").
+function winnersLabel(ws) {
+  const names = ws.map((p) => esc(p.name));
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} & ${names[names.length - 1]}`;
+}
 // Single representative winner (or null). Truthy means the game is over.
 function winner(game) {
   return winners(game)[0] || null;
@@ -385,6 +392,7 @@ const app = document.getElementById("app");
 let route = { name: "place" };
 let homeFilter = "today"; // games list date filter: "today" | "week" | "month" | "all"
 let pollTimer = null;
+let durationTimer = null; // ticks the live game-duration chip every second
 
 function routeToHash(name, params = {}) {
   const base = params.id ? `${name}/${params.id}` : name;
@@ -463,6 +471,7 @@ const KNOWN_ROUTES = ["place", "home", "stats", "entry", "game", "details"];
 
 function render() {
   stopPolling();
+  stopDurationTimer();
   // Unknown / stale route names fall back to home (keeps route.name coherent).
   if (!KNOWN_ROUTES.includes(route.name)) route = { name: "home" };
   updatePlaceBtn();
@@ -491,6 +500,12 @@ function stopPolling() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+}
+function stopDurationTimer() {
+  if (durationTimer) {
+    clearInterval(durationTimer);
+    durationTimer = null;
   }
 }
 // Auto-refresh the home games list (mirrors the score-screen polling), so a
@@ -567,14 +582,17 @@ function fmtDuration(ms) {
   if (m) return `${m} min ${String(s).padStart(2, "0")} s`;
   return `${s} s`;
 }
-// Elapsed time between the first and last recorded round (null if unknown).
+// Elapsed time since the game was created: counts up live while the game is
+// ongoing, then freezes at the last (winning) round once it's over.
+// Returns null if the creation time is unknown.
 function gameDuration(game) {
+  const start = game.createdAt;
+  if (!start) return null;
   const r = game.rounds;
-  if (r.length < 2) return null;
-  const first = r[0].at,
-    last = r[r.length - 1].at;
-  if (!first || !last || last <= first) return null;
-  return last - first;
+  const over = !!winner(game);
+  const end = over ? (r.length ? r[r.length - 1].at : start) : Date.now();
+  if (!end || end < start) return null;
+  return end - start;
 }
 // e.g. "Partie du lundi 25 mai à 13h30"
 function gameNameFromDate(ts) {
@@ -1217,7 +1235,8 @@ function renderHome() {
 
   const list = el(`<div class="game-list"></div>`);
   filtered.forEach((g) => {
-    const w = winner(g);
+    const ws = winners(g);
+    const w = ws[0] || null;
     const ongoing = !g.cancelled && !w;
     const names = g.players.map((p) => p.name).join(", ");
     let roundsNote = "";
@@ -1229,7 +1248,7 @@ function renderHome() {
     const statusBadge = g.cancelled
       ? `<span class="badge cancelled"><i class="fa-regular fa-ban"></i> Annulée</span>`
       : w
-        ? `<span class="badge rank1"><i class="fa-regular fa-trophy"></i> ${esc(w.name)}</span>`
+        ? `<span class="badge rank1"><i class="fa-regular fa-trophy"></i> ${winnersLabel(ws)}</span>`
         : `<div class="status-cell">
              <span class="badge ongoing">En cours <i class="fa-regular fa-spinner-third fa-spin"></i></span>
              <span class="round-note">Manche ${g.rounds.length + 1}</span>
@@ -1237,7 +1256,7 @@ function renderHome() {
     const card = el(`
       <div class="game-card ${g.cancelled ? "cancelled" : w ? "done" : "ongoing"}">
         <div class="meta">
-          <div class="name">${esc(g.name)} <span class="badge badge-sm ${modeClass(g.mode)}">${esc(modeLabel(g.mode))}</span></div>
+          <div class="name"><span class="name-text">${esc(g.name)}</span> <span class="badge badge-sm ${modeClass(g.mode)}">${esc(modeLabel(g.mode))}</span></div>
           <div class="sub">${esc(names || "Aucun joueur")}${roundsNote}</div>
         </div>
         ${statusBadge}
@@ -1559,16 +1578,17 @@ function renderGame(id) {
   const st = standings(game);
   const w = winner(game);
 
-  // Show how long the game took (first → last round) once it's over.
-  const dur = w ? gameDuration(game) : null;
+  // Elapsed time since creation: live while ongoing, frozen once the game is
+  // over (at the winning round).
+  const dur = gameDuration(game);
   const durationChip =
     dur != null
-      ? `<span class="target-note"><i class="fa-regular fa-clock"></i> ${fmtDuration(dur)}</span>`
+      ? `<span class="target-note" id="durationChip"><i class="fa-regular fa-clock"></i> <span class="dur-val">${fmtDuration(dur)}</span></span>`
       : "";
-  // Current round indicator under the title while the game is ongoing.
-  const roundLine = w
-    ? ""
-    : `<div class="game-round">Manche ${game.rounds.length + 1}</div>`;
+  // Round count shown on the meta row below the title.
+  // Ongoing: the round being played; finished/cancelled: total rounds played.
+  const roundCount = w ? game.rounds.length : game.rounds.length + 1;
+  const roundNum = `<span class="game-round-num">${roundCount} manche${roundCount === 1 ? "" : "s"}</span>`;
 
   const backRow = el(`
     <div class="row">
@@ -1578,23 +1598,23 @@ function renderGame(id) {
   app.appendChild(backRow);
 
   const head = el(`
-    <div class="game-head">
-      <div class="game-title">
-        <div class="game-title-main">
-          <h2>${esc(game.name)}</h2>
-          <span class="badge ${modeClass(game.mode)}">${esc(modeLabel(game.mode))}</span>
-        </div>
-        ${roundLine}
+    <div class="game-head game-head-stacked">
+      <div class="game-title-main">
+        <h2>${esc(game.name)}</h2>
+        <span class="badge ${modeClass(game.mode)}">${esc(modeLabel(game.mode))}</span>
       </div>
-      ${durationChip}
-      <div class="spacer"></div>
-      <button class="btn btn-ghost btn-sm" id="editPlayers">Modifier</button>
-      <div class="kebab">
-        <button class="btn btn-ghost btn-sm btn-icon" id="moreBtn" aria-label="Plus d'options" aria-haspopup="true" aria-expanded="false"><i class="fa-regular fa-ellipsis"></i></button>
-        <div class="kebab-menu" id="moreMenu" hidden>
-          <button class="kebab-item" id="shareBtn"><i class="fa-regular fa-share-nodes"></i> Partager</button>
-          ${game.cancelled ? "" : `<button class="kebab-item" id="cancel"><i class="fa-regular fa-ban"></i> Annuler</button>`}
-          <button class="kebab-item" id="del"><i class="fa-regular fa-trash-can"></i> Supprimer</button>
+      <div class="game-meta-row">
+        ${roundNum}
+        ${durationChip}
+        <button class="btn btn-ghost btn-sm ml-auto" id="editPlayers">Modifier</button>
+        <div class="kebab">
+          <button class="btn btn-ghost btn-sm btn-icon" id="moreBtn" aria-label="Plus d'options" aria-haspopup="true" aria-expanded="false"><i class="fa-regular fa-ellipsis"></i></button>
+          <div class="kebab-menu" id="moreMenu" hidden>
+            <button class="kebab-item kebab-edit" id="editKebab"><i class="fa-regular fa-pen-to-square"></i> Modifier</button>
+            <button class="kebab-item" id="shareBtn"><i class="fa-regular fa-share-nodes"></i> Partager</button>
+            ${game.cancelled ? "" : `<button class="kebab-item" id="cancel"><i class="fa-regular fa-ban"></i> Annuler</button>`}
+            <button class="kebab-item" id="del"${w ? "" : ' disabled title="Une partie en cours ne peut pas être supprimée — annulez-la d\'abord."'}><i class="fa-regular fa-trash-can"></i> Supprimer</button>
+          </div>
         </div>
       </div>
     </div>`);
@@ -1619,6 +1639,13 @@ function renderGame(id) {
     moreMenu.hidden = !open;
     moreBtn.setAttribute("aria-expanded", String(open));
     if (open) document.addEventListener("click", onOutside);
+  });
+
+  // Edit entry inside the menu (shown instead of the standalone button on
+  // narrow screens).
+  head.querySelector("#editKebab").addEventListener("click", () => {
+    closeMenu();
+    openEditPlayersDialog(game);
   });
 
   // Share the game via the native share sheet (clipboard fallback).
@@ -1659,6 +1686,7 @@ function renderGame(id) {
     });
   }
   head.querySelector("#del").addEventListener("click", async () => {
+    if (!w) return; // ongoing games can't be deleted (button is disabled)
     closeMenu();
     const ok = await confirmDialog({
       title: "Supprimer la partie ?",
@@ -1674,9 +1702,22 @@ function renderGame(id) {
 
   app.appendChild(head);
 
+  // Tick the duration chip every second while the game is ongoing; it freezes
+  // automatically once a winner exists (re-render swaps in the frozen value).
+  if (!w && dur != null) {
+    const valEl = head.querySelector("#durationChip .dur-val");
+    stopDurationTimer();
+    durationTimer = setInterval(() => {
+      if (route.name !== "game" || route.id !== id) return stopDurationTimer();
+      const g = getGame(id);
+      if (!g || winner(g)) return stopDurationTimer();
+      if (valEl && valEl.isConnected) valEl.textContent = fmtDuration(gameDuration(g));
+    }, 1000);
+  }
+
   const ws = winners(game);
   if (ws.length) {
-    const names = ws.map((p) => esc(p.name)).join(", ");
+    const names = winnersLabel(ws);
     const banner = game.cancelled
       ? el(
           `<div class="banner banner-cancelled"><i class="fa-regular fa-ban"></i> Partie annulée — ${ws.length > 1 ? "Vainqueurs" : "Vainqueur"} : <b>${names}</b> (${ws[0].total} pts)</div>`,
@@ -1769,11 +1810,17 @@ function buildSummary(game, st, w) {
     const previewCrown = projWinnerIds.has(p.id)
       ? ' <span class="crown"><i class="fa-regular fa-crown"></i></span>'
       : "";
-    const preview = hasDraftFor(p)
-      ? `<span class="score-preview"> → ${projected[p.id]}${previewCrown}</span>`
-      : "";
+    // A player marked "Éliminé" (bust) in the in-progress round: flag the row in
+    // red with a tag and hide the projected total (it would just repeat p.total).
+    const eliminated = !!(draft[p.id] && draft[p.id].bust);
+    let preview = "";
+    if (eliminated) {
+      preview = '<span class="elim-tag">éliminé.e</span>';
+    } else if (hasDraftFor(p)) {
+      preview = `<span class="score-preview"><i class="fa-regular fa-arrow-right-long"></i> ${projected[p.id]}${previewCrown}</span>`;
+    }
     const tr = el(`
-      <tr class="${won ? "winner-row" : ""}">
+      <tr class="${won ? "winner-row" : ""}${eliminated ? " eliminated-row" : ""}">
         <td class="rank-col">${rankBadge}</td>
         <td class="player-name">${esc(p.name)}</td>
         <td class="total-cell"><span class="score-badge ${rankClass}">${p.total}${crown}</span>${preview}</td>
@@ -1854,9 +1901,14 @@ function buildTable(game, rankMap, w) {
       const cell = r.scores[p.id] || { points: 0, flip7: false, bust: false };
       const td = el(`<td></td>`);
       const tags = `${cell.flip7 ? '<span class="flip7-tag">+15</span>' : ""}`;
+      // Eliminated cells stay editable but keep a "disabled" look while at 0.
+      const val = cell.bust ? 0 : Number(cell.points) || 0;
       td.innerHTML = `
-        <span class="cell-box"><input type="number" class="cell-input" value="${cell.bust ? 0 : Number(cell.points) || 0}" ${cell.bust ? "disabled" : ""} />${tags}</span>`;
+        <span class="cell-box"><input type="number" class="cell-input${val === 0 ? " cell-zero" : ""}" value="${val}" />${tags}</span>`;
       const input = td.querySelector("input");
+      input.addEventListener("input", () => {
+        input.classList.toggle("cell-zero", (Number(input.value) || 0) === 0);
+      });
       input.addEventListener("change", (e) => {
         const g = getGame(game.id);
         const beforeWinnerId = (winner(g) || {}).id || null;
@@ -1865,7 +1917,10 @@ function buildTable(game, rankMap, w) {
           flip7: false,
           bust: false,
         };
-        c.points = Number(e.target.value) || 0;
+        const v = Number(e.target.value) || 0;
+        c.points = v;
+        // A non-zero edit overrides the elimination so the score actually counts.
+        if (v !== 0) c.bust = false;
         g.rounds[ri].scores[p.id] = c;
         upsertGame(g);
         renderDetails(game.id);
@@ -1932,10 +1987,12 @@ function draftToCell(def, d) {
 }
 // Build and wire one player's score-entry row. `draft[p.id]` must be set.
 // Renders the Flip 7 controls (number + bonus + Éliminé) or, for "number"
-// games like Skyjo, a single number input (negatives allowed).
-function buildEntryRow(game, draft, p) {
+// games like Skyjo, a single number input (negatives allowed). `onChange` (if
+// given) fires after every draft mutation, e.g. to pre-save the round live.
+function buildEntryRow(game, draft, p, onChange) {
   const def = defFor(game);
   const d = draft[p.id];
+  const notify = () => onChange && onChange();
   if (def.entry === "number") {
     const row = el(`
       <div class="entry-player">
@@ -1946,6 +2003,7 @@ function buildEntryRow(game, draft, p) {
       </div>`);
     row.querySelector("input").addEventListener("input", (e) => {
       draft[p.id].points = e.target.value;
+      notify();
     });
     return row;
   }
@@ -1963,12 +2021,14 @@ function buildEntryRow(game, draft, p) {
   const bustBtn = row.querySelector(".bust-btn");
   numInput.addEventListener("input", (e) => {
     draft[p.id].points = e.target.value;
+    notify();
   });
   flipBtn.addEventListener("click", () => {
     if (draft[p.id].bust) return;
     draft[p.id].flip7 = !draft[p.id].flip7;
     flipBtn.classList.toggle("active", draft[p.id].flip7);
     row.classList.toggle("flipped", draft[p.id].flip7);
+    notify();
   });
   bustBtn.addEventListener("click", () => {
     draft[p.id].bust = !draft[p.id].bust;
@@ -1982,6 +2042,7 @@ function buildEntryRow(game, draft, p) {
       flipBtn.classList.remove("active");
       row.classList.remove("flipped");
     }
+    notify();
   });
   return row;
 }
@@ -2050,6 +2111,20 @@ function openScoresDialog(game) {
       <button class="btn btn-primary" id="saveRound">Enregistrer la manche</button>
     </div>`;
 
+  // Pre-save the draft live as scores are entered (debounced to avoid writing
+  // on every keystroke). Empty drafts clear any saved one.
+  const hasData = () => Object.values(draft).some(draftHasData);
+  const writeDraft = () => {
+    const g = getGame(game.id);
+    g.draftRound = hasData() ? JSON.parse(JSON.stringify(draft)) : null;
+    upsertGame(g);
+  };
+  let saveTimer = null;
+  const saveDraftSoon = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(writeDraft, 400);
+  };
+
   const grid = modal.querySelector("#entryGrid");
   game.players.forEach((p) => {
     const s = saved[p.id] || {};
@@ -2058,16 +2133,14 @@ function openScoresDialog(game) {
       flip7: !!s.flip7,
       bust: !!s.bust,
     };
-    grid.appendChild(buildEntryRow(game, draft, p));
+    grid.appendChild(buildEntryRow(game, draft, p, saveDraftSoon));
   });
 
-  // Leaving the dialog (×, Annuler, click outside) pre-saves the in-progress
-  // round so it can be resumed later. Empty drafts clear any saved one.
-  const hasData = () => Object.values(draft).some(draftHasData);
+  // Leaving the dialog (×, Annuler, click outside) flushes the pending pre-save
+  // so the in-progress round can be resumed later.
   const closeKeepingDraft = () => {
-    const g = getGame(game.id);
-    g.draftRound = hasData() ? JSON.parse(JSON.stringify(draft)) : null;
-    upsertGame(g);
+    clearTimeout(saveTimer);
+    writeDraft();
     overlay.remove();
     if (route.name === "game" && route.id === game.id) go("game", { id: game.id });
   };
@@ -2080,6 +2153,7 @@ function openScoresDialog(game) {
   });
 
   modal.querySelector("#saveRound").addEventListener("click", () => {
+    clearTimeout(saveTimer); // cancel any pending draft write
     const def = defFor(game);
     const scores = {};
     game.players.forEach((p) => {
@@ -2248,19 +2322,38 @@ function computeStats(place, filter = "flip7") {
   const games = gamesForPlace(place).filter(f.match);
   const map = {}; // key: lowercased trimmed name -> aggregate
   games.forEach((g) => {
-    const w = winner(g);
+    const def = defFor(g);
     g.players.forEach((p) => {
       const name = p.name.trim();
       if (!name) return;
       const key = name.toLowerCase();
-      if (!map[key]) map[key] = { name, games: 0, points: 0, wins: 0 };
-      map[key].games += 1;
-      map[key].points += playerTotal(g, p.id);
+      if (!map[key])
+        map[key] = {
+          name,
+          games: 0,
+          points: 0,
+          wins: 0,
+          elims: 0, // number of busted (eliminated) rounds across games
+          bestGame: 0, // highest single-game total
+          bestRound: 0, // highest single-round score
+        };
+      const agg = map[key];
+      agg.games += 1;
+      const total = playerTotal(g, p.id);
+      agg.points += total;
+      if (total > agg.bestGame) agg.bestGame = total;
+      g.rounds.forEach((r) => {
+        const cell = r.scores[p.id];
+        if (cell && cell.bust) agg.elims += 1;
+        const rv = def.cellValue(cell);
+        if (rv > agg.bestRound) agg.bestRound = rv;
+      });
     });
-    if (w) {
+    // Ties count as a win for every co-winner, not just one representative.
+    winners(g).forEach((w) => {
       const key = w.name.trim().toLowerCase();
       if (map[key]) map[key].wins += 1;
-    }
+    });
   });
   const ptsCmp =
     f.order === "asc"
@@ -2270,6 +2363,52 @@ function computeStats(place, filter = "flip7") {
     (a, b) => b.wins - a.wins || ptsCmp(a, b) || b.games - a.games,
   );
 }
+
+// Stat "metrics" selectable for Flip 7: which table to show. Each defines its
+// value column, sort order, and the tie test used for shared ranks.
+const STAT_METRICS = {
+  ranking: {
+    label: "Classement",
+    cols: (mode) => [
+      { head: "Parties", get: (s) => s.games },
+      { head: "Points", get: (s) => s.points },
+    ],
+    valueHead: "Victoires",
+    value: (s) => s.wins,
+    sort: (order) => (a, b) =>
+      b.wins - a.wins ||
+      (order === "asc" ? a.points - b.points : b.points - a.points) ||
+      b.games - a.games,
+    tie: (a, b) =>
+      a.wins === b.wins && a.points === b.points && a.games === b.games,
+  },
+  elims: {
+    label: "Le plus éliminé",
+    cols: () => [{ head: "Parties", get: (s) => s.games }],
+    valueHead: "Éliminations",
+    value: (s) => s.elims,
+    sort: () => (a, b) => b.elims - a.elims || b.games - a.games,
+    tie: (a, b) => a.elims === b.elims && a.games === b.games,
+  },
+  bestGame: {
+    label: "Le plus gros score",
+    cols: () => [{ head: "Parties", get: (s) => s.games }],
+    valueHead: "Meilleur total",
+    value: (s) => s.bestGame,
+    sort: () => (a, b) => b.bestGame - a.bestGame || b.games - a.games,
+    tie: (a, b) => a.bestGame === b.bestGame,
+  },
+  bestRound: {
+    label: "La plus grosse manche",
+    cols: () => [{ head: "Parties", get: (s) => s.games }],
+    valueHead: "Meilleure manche",
+    value: (s) => s.bestRound,
+    sort: () => (a, b) => b.bestRound - a.bestRound || b.games - a.games,
+    tie: (a, b) => a.bestRound === b.bestRound,
+  },
+};
+// Metric selector only applies to the Flip 7 family (busts/Flip 7 bonuses).
+const FLIP7_VERSIONS = new Set(["flip7", "classic", "vengeance"]);
 
 function renderStats() {
   app.innerHTML = "";
@@ -2288,6 +2427,7 @@ function renderStats() {
     { key: "timesup", label: "Time's Up!" },
   ];
   let statMode = "flip7";
+  let statMetric = "ranking";
   const controls = el(`
     <div class="date-filter" id="versionFilter">
       ${VERSIONS.map((v) => `<button type="button" data-v="${v.key}" class="${v.key === statMode ? "active" : ""}">${v.label}</button>`).join("")}
@@ -2299,20 +2439,50 @@ function renderStats() {
       versionBtns.forEach((x) =>
         x.classList.toggle("active", x.dataset.v === statMode),
       );
-      draw(statMode);
+      if (!FLIP7_VERSIONS.has(statMode)) statMetric = "ranking";
+      syncMetricControls();
+      draw();
     }),
   );
   app.appendChild(controls);
 
+  // Metric selector (Flip 7 only): Classement / Le plus éliminé / etc.
+  const metricControls = el(`
+    <div class="stat-metric-filter" id="metricFilter">
+      <select class="stat-metric-select">
+        ${Object.entries(STAT_METRICS)
+          .map(
+            ([key, m]) =>
+              `<option value="${key}" ${key === statMetric ? "selected" : ""}>${m.label}</option>`,
+          )
+          .join("")}
+      </select>
+    </div>`);
+  const metricSelect = metricControls.querySelector("select");
+  metricSelect.addEventListener("change", () => {
+    statMetric = metricSelect.value;
+    draw();
+  });
+  app.appendChild(metricControls);
+
+  function syncMetricControls() {
+    metricControls.style.display = FLIP7_VERSIONS.has(statMode) ? "" : "none";
+    metricSelect.value = statMetric;
+  }
+
   const content = el(`<div id="statsContent"></div>`);
   app.appendChild(content);
 
-  function draw(mode) {
+  function draw() {
     content.innerHTML = "";
-    const stats = computeStats(place, mode);
+    const f = STAT_FILTERS[statMode] || STAT_FILTERS.flip7;
+    const metric = STAT_METRICS[statMetric] || STAT_METRICS.ranking;
+    const stats = computeStats(place, statMode)
+      .slice()
+      .sort(metric.sort(f.order));
     if (!stats.length) {
-      const ver = VERSIONS.find((v) => v.key === mode);
-      const modeTxt = mode === "flip7" ? "" : ` en ${ver.label}`;
+      const ver = VERSIONS.find((v) => v.key === statMode);
+      const modeTxt = statMode === "flip7" ? "" : ` en ${ver.label}`;
       content.appendChild(
         wrapPanel(
           el(
@@ -2323,22 +2493,19 @@ function renderStats() {
       return;
     }
 
+    const cols = metric.cols(statMode);
     const wrap = el(`<div class="table-wrap"></div>`);
     const table = el(`
       <table class="score stats-table">
         <thead><tr>
           <th class="rank-col">#</th>
-          <th class="player-name">${unitLabel(mode)}</th>
-          <th>Parties</th>
-          <th>Points</th>
-          <th>Victoires</th>
+          <th class="player-name">${unitLabel(statMode)}</th>
+          ${cols.map((c) => `<th>${c.head}</th>`).join("")}
+          <th>${metric.valueHead}</th>
         </tr></thead>
       </table>`);
     const tbody = el(`<tbody></tbody>`);
-    const labels = rankLabels(
-      stats,
-      (a, b) => a.wins === b.wins && a.points === b.points && a.games === b.games,
-    );
+    const labels = rankLabels(stats, metric.tie);
     stats.forEach((s, i) => {
       const { place, label } = labels[i];
       const rankClass = `rank${place}`;
@@ -2346,9 +2513,8 @@ function renderStats() {
         <tr class="${place === 1 ? "winner-row" : ""}">
           <td class="rank-col"><span class="badge ${rankClass}">${label}</span></td>
           <td class="player-name">${esc(s.name)}</td>
-          <td>${s.games}</td>
-          <td>${s.points}</td>
-          <td class="total-cell"><span class="score-badge ${rankClass}">${s.wins}</span></td>
+          ${cols.map((c) => `<td>${c.get(s)}</td>`).join("")}
+          <td class="total-cell"><span class="score-badge ${rankClass}">${metric.value(s)}</span></td>
         </tr>`);
       tbody.appendChild(tr);
     });
@@ -2357,7 +2523,8 @@ function renderStats() {
     content.appendChild(wrap);
   }
 
-  draw(statMode);
+  syncMetricControls();
+  draw();
 }
 
 /* ---------- disable zoom (pinch / ctrl+wheel / ctrl +/-) ---------- */
