@@ -11,9 +11,11 @@ const STORE_KEY = "flip7_games";
    wildly different games coexist — e.g. Flip 7 (highest wins, first to 200)
    and Skyjo (lowest wins, ends when someone reaches 100).
 
-   Cell shapes differ per ruleset:
-     flip7  → { points, flip7, bust }
-     skyjo  → { points }  (may be negative) */
+   A ruleset ends either at a score `target` (Flip 7, Skyjo) or after a fixed
+   number of `rounds` (Time's Up!). Cell shapes differ per ruleset:
+     flip7    → { points, flip7, bust }
+     skyjo    → { points }  (may be negative)
+     timesup  → { points }  (cards guessed by a team) */
 const RULESETS = {
   flip7: {
     target: 200,
@@ -33,6 +35,31 @@ const RULESETS = {
       return Number(cell && cell.points) || 0;
     },
   },
+  timesup: {
+    rounds: 3, // ends after a fixed number of rounds (no score target)
+    scoreOrder: "desc", // highest team total wins
+    entry: "number",
+    unit: "equipe", // played by teams, not individual players
+    cellValue(cell) {
+      return Number(cell && cell.points) || 0;
+    },
+  },
+};
+
+// Wording for the competing entity, per ruleset (default: players).
+const UNITS = {
+  joueur: {
+    one: "Joueur",
+    many: "Joueurs",
+    add: "Ajouter un joueur",
+    placeholder: "Nom du joueur",
+  },
+  equipe: {
+    one: "Équipe",
+    many: "Équipes",
+    add: "Ajouter une équipe",
+    placeholder: "Nom de l'équipe",
+  },
 };
 
 /* ---------- modes ----------
@@ -49,6 +76,11 @@ const MODES = {
     rules: () => rulesVengeanceHTML(),
   },
   skyjo: { label: "Skyjo", ruleset: "skyjo", rules: () => rulesSkyjoHTML() },
+  timesup: {
+    label: "Time's Up!",
+    ruleset: "timesup",
+    rules: () => rulesTimesUpHTML(),
+  },
 };
 const DEFAULT_MODE = "classic";
 
@@ -68,6 +100,18 @@ function modeClass(mode) {
 }
 function rulesFor(mode) {
   return (MODES[mode] || MODES[DEFAULT_MODE]).rules();
+}
+// Unit kind key ("joueur" | "equipe") for a mode/filter.
+function unitKeyOf(mode) {
+  return rulesetOf(mode).unit || "joueur";
+}
+// Wording for the competing entity (player vs team) for a mode/filter.
+function unitOf(mode) {
+  return UNITS[rulesetOf(mode).unit] || UNITS.joueur;
+}
+// Singular label for the score-table column (e.g. "Équipe" for Time's Up!).
+function unitLabel(mode) {
+  return unitOf(mode).one;
 }
 // New-game / edit "Type de partie" tab buttons, generated from the registry.
 function modeTabsHTML() {
@@ -253,14 +297,18 @@ function filterGamesByDate(games, filter) {
 }
 
 // Unique player names already used at a place (for name autocompletion).
-function placePlayerNames(place) {
+// Names already used at a place, restricted to a unit kind ("joueur" |
+// "equipe") so player games don't suggest team names and vice versa.
+function placePlayerNames(place, unit = "joueur") {
   const seen = new Map(); // lowercased -> original casing
-  gamesForPlace(place).forEach((g) =>
-    g.players.forEach((p) => {
-      const n = (p.name || "").trim();
-      if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
-    }),
-  );
+  gamesForPlace(place)
+    .filter((g) => unitKeyOf(g.mode) === unit)
+    .forEach((g) =>
+      g.players.forEach((p) => {
+        const n = (p.name || "").trim();
+        if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+      }),
+    );
   return [...seen.values()].sort((a, b) => a.localeCompare(b, "fr"));
 }
 
@@ -292,16 +340,22 @@ function standings(game) {
     .map((p) => ({ ...p, total: playerTotal(game, p.id) }))
     .sort((a, b) => (asc ? a.total - b.total : b.total - a.total));
 }
+// Is the game finished? Target-based games (Flip 7, Skyjo) end once any player
+// reaches the target; round-limited games (Time's Up!) end after N rounds.
+function isGameOver(game, s) {
+  const def = defFor(game);
+  if (def.rounds) return game.rounds.length >= def.rounds;
+  return s.some((p) => p.total >= game.target);
+}
 // Winning players from a standings array already sorted by the game's order.
-// A cancelled game is won by the current leader(s); otherwise the game is over
-// once ANY player reaches the target, and the leader(s) win (highest for
-// Flip 7, lowest for Skyjo). Ties at the leading total are all returned.
+// A cancelled game is won by the current leader(s); otherwise, once the game is
+// over, the leader(s) win (highest for Flip 7 / Time's Up!, lowest for Skyjo).
+// Ties at the leading total are all returned.
 function winnersFromStandings(game, s) {
   if (!s.length) return [];
   const best = s[0].total;
   if (game.cancelled) return s.filter((p) => p.total === best);
-  const reached = s.some((p) => p.total >= game.target);
-  if (reached) return s.filter((p) => p.total === best);
+  if (isGameOver(game, s)) return s.filter((p) => p.total === best);
   return [];
 }
 function winners(game) {
@@ -617,6 +671,17 @@ const CEL_EMOJIS = [
   "rocket",
   "face-grin-stars",
 ].map((name) => `<i class="fa-regular fa-${name}"></i>`);
+// Shown when several players/teams tie for the win.
+const TIE_CONGRATS = [
+  "Égalité parfaite !",
+  "Ex æquo !",
+  "Impossible de les départager !",
+  "À égalité au sommet !",
+  "Tout le monde sur la plus haute marche !",
+];
+const TIE_EMOJIS = ["handshake", "scale-balanced", "people-group", "medal"].map(
+  (name) => `<i class="fa-regular fa-${name}"></i>`,
+);
 
 function celConfettiMarkup(n = 70) {
   const colors = [
@@ -642,9 +707,15 @@ function celConfettiMarkup(n = 70) {
   return `<div class="cel-confetti">${pieces}</div>`;
 }
 
-function celebrate(w, game) {
-  const text = CONGRATS[Math.floor(Math.random() * CONGRATS.length)];
-  const emoji = CEL_EMOJIS[Math.floor(Math.random() * CEL_EMOJIS.length)];
+function celebrate(game) {
+  const ws = winners(game);
+  if (!ws.length) return;
+  const tie = ws.length > 1;
+  const pool = tie ? TIE_CONGRATS : CONGRATS;
+  const emojiPool = tie ? TIE_EMOJIS : CEL_EMOJIS;
+  const text = pool[Math.floor(Math.random() * pool.length)];
+  const emoji = emojiPool[Math.floor(Math.random() * emojiPool.length)];
+  const names = ws.map((p) => esc(p.name)).join(" & ");
   const variant = "cel-v" + (1 + Math.floor(Math.random() * 5)); // random animation
   const overlay = el(`
     <div class="celebrate ${variant}">
@@ -652,8 +723,8 @@ function celebrate(w, game) {
       <div class="cel-inner">
         <div class="cel-emoji">${emoji}</div>
         <div class="cel-title">${esc(text)}</div>
-        <div class="cel-name">${esc(w.name)}</div>
-        <div class="cel-score">${w.total} points <i class="fa-regular fa-trophy"></i></div>
+        <div class="cel-name">${names}</div>
+        <div class="cel-score">${ws[0].total} points <i class="fa-regular fa-trophy"></i></div>
         <div class="cel-actions">
           <button class="btn btn-primary cel-close">Continuer</button>
           <button class="btn btn-restart cel-restart"><i class="fa-regular fa-arrows-rotate"></i> Rejouer</button>
@@ -684,10 +755,11 @@ function celebrate(w, game) {
   document.body.appendChild(overlay);
 }
 
-// Compare winner before/after a score change; celebrate a brand-new win.
+// Compare winner before/after a score change; celebrate a brand-new win
+// (including ties — the celebration lists every tied player/team).
 function celebrateIfNewWinner(beforeWinnerId, game) {
   const w = winner(game);
-  if (w && w.id !== beforeWinnerId) celebrate(w, game);
+  if (w && w.id !== beforeWinnerId) celebrate(game);
 }
 
 /* ---------- restart ---------- */
@@ -934,6 +1006,41 @@ function rulesSkyjoHTML() {
     </ul>`;
 }
 
+function rulesTimesUpHTML() {
+  return `
+    <p class="rules-intro"><b>Time's Up!</b> est un jeu d'ambiance par <b>équipes</b> où l'on fait deviner des personnalités. La partie se joue en <b>3 manches</b> avec le <b>même paquet de cartes</b> à chaque fois ; à la fin, l'équipe au <b>plus haut total</b> gagne.</p>
+
+    <h3><i class="fa-regular fa-bullseye"></i> But du jeu</h3>
+    <p>En équipes, faire deviner un maximum de personnalités en un temps limité (≈ 30 s par tour). On cumule les cartes devinées sur les 3 manches ; l'équipe avec le <b>plus de points</b> l'emporte.</p>
+
+    <h3><i class="fa-regular fa-users"></i> Mise en place</h3>
+    <ul>
+      <li>Formez <b>2 équipes ou plus</b>.</li>
+      <li>Chaque joueur écrit quelques personnalités (réelles ou fictives, connues de tous) ; toutes les cartes forment le paquet commun.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-arrows-rotate"></i> Les 3 manches</h3>
+    <ul>
+      <li><b>Manche 1 — Description libre</b> : faire deviner en parlant librement (sans dire le nom).</li>
+      <li><b>Manche 2 — Un seul mot</b> : un seul mot d'indice par carte.</li>
+      <li><b>Manche 3 — Mime</b> : uniquement des gestes, sans parler.</li>
+    </ul>
+    <p>À chaque manche on rejoue avec <b>tout le paquet</b> : les cartes mémorisées aux manches précédentes deviennent plus faciles.</p>
+
+    <h3><i class="fa-regular fa-stopwatch"></i> Déroulement d'un tour</h3>
+    <p>À tour de rôle, une équipe désigne un « parleur » qui fait deviner le plus de cartes possible avant la fin du sablier. Chaque carte devinée = <b>1 point</b> pour l'équipe. La manche s'arrête quand le paquet est épuisé, puis on rebat les cartes pour la manche suivante.</p>
+
+    <h3><i class="fa-regular fa-trophy"></i> Fin de la partie</h3>
+    <p>Après la <b>3ᵉ manche</b>, on additionne les points des 3 manches. L'équipe au <b>plus haut total</b> gagne (égalité possible).</p>
+
+    <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
+    <ul>
+      <li>Saisissez les <b>noms d'équipes</b> dans les joueurs.</li>
+      <li>À chaque manche, entrez le <b>nombre de cartes devinées</b> par chaque équipe.</li>
+      <li>La partie se termine automatiquement après <b>3 manches</b> ; le plus haut total gagne.</li>
+    </ul>`;
+}
+
 // Rules shown in a dialog (opened from the top-bar book button).
 function openRulesDialog() {
   // When viewing a game, default the rules to that game's mode.
@@ -1146,41 +1253,29 @@ function renderHome() {
 // array ({id, name}) in place. Returns the redraw function (call it after
 // pushing a new player). Identical preparation logic for both screens.
 // Uses Pointer Events (mouse + touch) so reordering works on mobile too.
-function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
+function renderPlayerRows(
+  rowsEl,
+  players,
+  { allowRemove = true, placeholder = "Nom du joueur", suggestions } = {},
+) {
+  // placeholder may be a function so it tracks the dialog's selected game.
+  const phText = () =>
+    typeof placeholder === "function" ? placeholder() : placeholder;
+  // Autocompletion source; may be a function so it tracks the selected game
+  // (player names vs team names). A custom dropdown is used instead of
+  // <datalist>, whose mobile support is unreliable.
+  const getSuggestions = () =>
+    typeof suggestions === "function"
+      ? suggestions()
+      : suggestions || placePlayerNames(getSelectedPlace());
   let dragSrc = null;
-  // Autocompletion of player names already used at the current place. A custom
-  // dropdown is used instead of <datalist>, whose mobile support is unreliable.
-  const suggestions = placePlayerNames(getSelectedPlace());
 
   // Wire a custom suggestions dropdown to a row's name input. The dropdown is
-  // portalled to <body> (position: fixed) so it's never clipped by a dialog's
-  // overflow:hidden; it's positioned under the input and follows scroll/resize.
+  // an in-flow block right under the input (inside the scrollable dialog body)
+  // so it follows the input — unlike a position:fixed overlay, it doesn't drift
+  // when the mobile keyboard resizes the viewport, and it's never clipped.
   function wireSuggestions(input, i) {
-    if (!suggestions.length) return;
-    let box = null;
-    const place = () => {
-      const r = input.getBoundingClientRect();
-      const gap = 4;
-      const h = box.offsetHeight;
-      // Lower bound = the dialog footer top (so the menu doesn't cover it),
-      // falling back to the viewport bottom outside a dialog.
-      const modal = input.closest(".modal");
-      const foot = modal && modal.querySelector(".scores-dialog-foot");
-      const limit = foot ? foot.getBoundingClientRect().top : window.innerHeight;
-      // Open upward when there isn't enough room below the input.
-      const openUp = limit - r.bottom < h + gap;
-      box.style.left = `${r.left}px`;
-      box.style.width = `${r.width}px`;
-      box.style.top = openUp ? `${r.top - h - gap}px` : `${r.bottom + gap}px`;
-    };
-    const reposition = () => box && place();
-    const close = () => {
-      if (!box) return;
-      box.remove();
-      box = null;
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", reposition, true);
-    };
+    const box = input.parentElement.querySelector(".name-suggest");
     const renderList = () => {
       const q = (input.value || "").trim().toLowerCase();
       // Hide names already chosen in other rows + the current exact value.
@@ -1190,28 +1285,16 @@ function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
           .map((p) => (p.name || "").trim().toLowerCase())
           .filter(Boolean),
       );
-      const matches = suggestions
+      const matches = getSuggestions()
         .filter((n) => {
           const nl = n.toLowerCase();
           return !taken.has(nl) && nl !== q && (!q || nl.includes(q));
         })
         .slice(0, 6);
-      if (!matches.length) return close();
-      if (!box) {
-        box = el(`<div class="name-suggest"></div>`);
-        document.body.appendChild(box);
-        // pointerdown (not click) fires before blur — works for touch and mouse.
-        box.addEventListener("pointerdown", (e) => {
-          const btn = e.target.closest(".name-suggest-item");
-          if (!btn) return;
-          e.preventDefault();
-          input.value = btn.textContent;
-          players[i].name = btn.textContent;
-          close();
-          revalidate(i);
-        });
-        window.addEventListener("resize", reposition);
-        window.addEventListener("scroll", reposition, true);
+      if (!matches.length) {
+        box.hidden = true;
+        box.innerHTML = "";
+        return;
       }
       box.innerHTML = matches
         .map(
@@ -1219,12 +1302,28 @@ function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
             `<button type="button" class="name-suggest-item">${esc(n)}</button>`,
         )
         .join("");
-      place();
+      box.hidden = false;
+      // Keep the list in view (e.g. when the keyboard just opened).
+      box.scrollIntoView({ block: "nearest" });
     };
     input.addEventListener("focus", renderList);
     input.addEventListener("input", renderList);
     // Delay so a tap on an item registers before the list hides.
-    input.addEventListener("blur", () => setTimeout(close, 150));
+    input.addEventListener("blur", () =>
+      setTimeout(() => {
+        box.hidden = true;
+      }, 150),
+    );
+    // pointerdown (not click) fires before blur — works for touch and mouse.
+    box.addEventListener("pointerdown", (e) => {
+      const btn = e.target.closest(".name-suggest-item");
+      if (!btn) return;
+      e.preventDefault();
+      input.value = btn.textContent;
+      players[i].name = btn.textContent;
+      box.hidden = true;
+      revalidate(i);
+    });
   }
 
   // Index of the row whose upper half currently contains pointer Y, i.e. the
@@ -1245,8 +1344,6 @@ function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
   }
 
   function draw() {
-    // Drop any portalled suggestion dropdowns left over from removed rows.
-    document.querySelectorAll("body > .name-suggest").forEach((b) => b.remove());
     rowsEl.innerHTML = "";
     players.forEach((p, i) => {
       const row = el(`
@@ -1254,7 +1351,8 @@ function renderPlayerRows(rowsEl, players, { allowRemove = true } = {}) {
           <span class="drag-handle" title="Déplacer"><i class="fa-regular fa-grip-dots-vertical"></i></span>
           <div class="player-input-wrap">
             <div class="name-field">
-              <input type="text" placeholder="Nom du joueur" value="${esc(p.name)}" autocomplete="off" />
+              <input type="text" placeholder="${esc(phText())}" value="${esc(p.name)}" autocomplete="off" />
+              <div class="name-suggest" hidden></div>
             </div>
             <div class="player-error" hidden></div>
           </div>
@@ -1371,7 +1469,7 @@ function openSetupDialog(opts = {}) {
         <div class="mode-tabs" id="modeTabs">${modeTabsHTML()}</div>
       </div>
       <div class="field">
-        <label>Joueurs</label>
+        <label id="playersLabel">Joueurs</label>
         <div class="player-rows" id="rows"></div>
         <button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>
       </div>
@@ -1382,6 +1480,19 @@ function openSetupDialog(opts = {}) {
       <button class="btn btn-primary" id="start">Commencer la partie</button>
     </div>`;
 
+  const rowsEl = modal.querySelector("#rows");
+  const addBtn = modal.querySelector("#addPlayer");
+  const playersLabel = modal.querySelector("#playersLabel");
+  // Reflect the selected game's wording (players vs teams).
+  const applyUnit = () => {
+    const u = unitOf(mode);
+    playersLabel.textContent = u.many;
+    addBtn.textContent = `+ ${u.add}`;
+    rowsEl
+      .querySelectorAll('input[type="text"]')
+      .forEach((i) => (i.placeholder = u.placeholder));
+  };
+
   const modeTabs = modal.querySelector("#modeTabs");
   const syncModeTabs = () =>
     modeTabs
@@ -1391,12 +1502,16 @@ function openSetupDialog(opts = {}) {
     b.addEventListener("click", () => {
       mode = b.dataset.mode;
       syncModeTabs();
+      applyUnit();
     }),
   );
   syncModeTabs();
 
-  const rowsEl = modal.querySelector("#rows");
-  const drawRows = renderPlayerRows(rowsEl, players);
+  const drawRows = renderPlayerRows(rowsEl, players, {
+    placeholder: () => unitOf(mode).placeholder,
+    suggestions: () => placePlayerNames(place, unitKeyOf(mode)),
+  });
+  applyUnit();
   modal.querySelector("#addPlayer").addEventListener("click", () => {
     players.push({ id: uid(), name: "" });
     drawRows();
@@ -1567,7 +1682,7 @@ function renderGame(id) {
           `<div class="banner banner-cancelled"><i class="fa-regular fa-ban"></i> Partie annulée — ${ws.length > 1 ? "Vainqueurs" : "Vainqueur"} : <b>${names}</b> (${ws[0].total} pts)</div>`,
         )
       : el(
-          `<div class="banner">${confettiMarkup()}<span class="crown"><i class="fa-regular fa-trophy"></i></span> <b>${names}</b> gagne avec ${ws[0].total} points !</div>`,
+          `<div class="banner">${confettiMarkup()}<span class="crown"><i class="fa-regular fa-trophy"></i></span> <b>${names}</b> ${ws.length > 1 ? "gagnent" : "gagne"} avec ${ws[0].total} points !</div>`,
         );
     app.appendChild(wrapPanel(banner));
   }
@@ -1611,7 +1726,7 @@ function buildSummary(game, st, w) {
   const winIds = new Set(winners(game).map((p) => p.id));
   const wrap = el(`<div class="table-wrap"></div>`);
   const table = el(
-    `<table class="score summary-table"><thead><tr><th class="rank-col">#</th><th class="player-name">Joueur</th><th>Total</th></tr></thead></table>`,
+    `<table class="score summary-table"><thead><tr><th class="rank-col">#</th><th class="player-name">${unitLabel(game.mode)}</th><th>Total</th></tr></thead></table>`,
   );
   const tbody = el(`<tbody></tbody>`);
   const labels = rankLabels(st, (a, b) => a.total === b.total);
@@ -1712,7 +1827,7 @@ function buildTable(game, rankMap, w) {
   const table = el(`<table class="score"></table>`);
 
   // head
-  let thead = `<thead><tr><th class="rank-col">#</th><th class="player-name">Joueur</th>`;
+  let thead = `<thead><tr><th class="rank-col">#</th><th class="player-name">${unitLabel(game.mode)}</th>`;
   game.rounds.forEach((_, i) => {
     thead += `<th>M${i + 1}</th>`;
   });
@@ -2009,7 +2124,7 @@ function openEditPlayersDialog(game) {
         <div class="mode-tabs" id="modeTabs">${modeTabsHTML()}</div>
       </div>
       <div class="field">
-        <label>Joueurs</label>
+        <label id="playersLabel">Joueurs</label>
         <div class="player-rows" id="rows"></div>
         ${locked ? "" : `<button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>`}
       </div>
@@ -2020,6 +2135,19 @@ function openEditPlayersDialog(game) {
       <button class="btn btn-primary" id="save">Enregistrer</button>
     </div>`;
 
+  const rowsEl = modal.querySelector("#rows");
+  const addBtn = modal.querySelector("#addPlayer");
+  const playersLabel = modal.querySelector("#playersLabel");
+  // Reflect the selected game's wording (players vs teams).
+  const applyUnit = () => {
+    const u = unitOf(mode);
+    playersLabel.textContent = u.many;
+    if (addBtn) addBtn.textContent = `+ ${u.add}`;
+    rowsEl
+      .querySelectorAll('input[type="text"]')
+      .forEach((i) => (i.placeholder = u.placeholder));
+  };
+
   const modeTabs = modal.querySelector("#modeTabs");
   const syncModeTabs = () =>
     modeTabs
@@ -2029,13 +2157,17 @@ function openEditPlayersDialog(game) {
     b.addEventListener("click", () => {
       mode = b.dataset.mode;
       syncModeTabs();
+      applyUnit();
     }),
   );
   syncModeTabs();
 
-  const rowsEl = modal.querySelector("#rows");
-  const drawRows = renderPlayerRows(rowsEl, players, { allowRemove: !locked });
-  const addBtn = modal.querySelector("#addPlayer");
+  const drawRows = renderPlayerRows(rowsEl, players, {
+    allowRemove: !locked,
+    placeholder: () => unitOf(mode).placeholder,
+    suggestions: () => placePlayerNames(getSelectedPlace(), unitKeyOf(mode)),
+  });
+  applyUnit();
   if (addBtn) {
     addBtn.addEventListener("click", () => {
       players.push({ id: uid(), name: "" });
@@ -2109,6 +2241,7 @@ const STAT_FILTERS = {
   classic: { match: (g) => (g.mode || "classic") === "classic", order: "desc" },
   vengeance: { match: (g) => g.mode === "vengeance", order: "desc" },
   skyjo: { match: (g) => g.mode === "skyjo", order: "asc" },
+  timesup: { match: (g) => g.mode === "timesup", order: "desc" },
 };
 function computeStats(place, filter = "flip7") {
   const f = STAT_FILTERS[filter] || STAT_FILTERS.flip7;
@@ -2152,6 +2285,7 @@ function renderStats() {
     { key: "classic", label: "Flip 7" },
     { key: "vengeance", label: "Flip 7 Vengeance" },
     { key: "skyjo", label: "Skyjo" },
+    { key: "timesup", label: "Time's Up!" },
   ];
   let statMode = "flip7";
   const controls = el(`
@@ -2194,7 +2328,7 @@ function renderStats() {
       <table class="score stats-table">
         <thead><tr>
           <th class="rank-col">#</th>
-          <th class="player-name">Joueur</th>
+          <th class="player-name">${unitLabel(mode)}</th>
           <th>Parties</th>
           <th>Points</th>
           <th>Victoires</th>
