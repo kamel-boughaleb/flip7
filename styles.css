@@ -41,6 +41,16 @@
   --timesup-dark: #d4b800; /* darker stop / border */
   --timesup-glow: rgba(252, 221, 11, 0.45);
 
+  /* Qwirkle accent */
+  --qwirkle: #c5191c; /* lighter gradient stop / base */
+  --qwirkle-dark: #9c1316; /* darker stop / border */
+  --qwirkle-glow: rgba(197, 25, 28, 0.45);
+
+  /* Contrée accent */
+  --contree: #6f9e69; /* lighter gradient stop / base */
+  --contree-dark: #577e52; /* darker stop / border */
+  --contree-glow: rgba(111, 158, 105, 0.45);
+
   --surface: #eff8f7; /* page bg */
   --card: #ffffff; /* card bg */
 
@@ -97,7 +107,7 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
     "Segoe UI", system-ui, Roboto, Helvetica, Arial, sans-serif;
-  min-height: 100vh;
+  min-height: 100dvh;
   touch-action: manipulation; /* no double-tap zoom */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -112,9 +122,6 @@ body {
   border-bottom: 3px dashed rgba(43, 168, 162, 0.3);
   background: rgba(255, 248, 231, 0.7);
   backdrop-filter: blur(6px);
-  position: sticky;
-  top: 0;
-  z-index: 5;
 }
 /* compact FLIP7 wordmark in the bar */
 .logo {
@@ -179,7 +186,7 @@ body {
 main {
   max-width: 61.25rem;
   margin: 0 auto;
-  padding: 1.75rem 0 5.625rem;
+  padding: 1.75rem 0px;
   display: flex;
   flex-direction: column;
 }
@@ -678,6 +685,20 @@ input:focus {
   gap: 1rem 0.5rem;
   margin-bottom: 0.875rem;
 }
+/* Contrée: full-width score-target input (ID beats .cell-input width) */
+#targetInput.cell-input {
+  width: 100%;
+}
+/* Contrée: live "team A / team B" preview under the roster */
+.teams-hint {
+  margin: 0.25rem 0 0;
+  padding: 0.625rem 0.75rem;
+  background: var(--teal-bg);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
 .player-row {
   display: flex;
   gap: 1rem 0.5rem;
@@ -840,6 +861,16 @@ input:focus {
   box-shadow: 0 2px 12px var(--timesup-glow);
   color: var(--ink);
 }
+.rules-tab.active[data-tab="qwirkle"] {
+  background: linear-gradient(135deg, var(--qwirkle), var(--qwirkle-dark));
+  border-color: var(--qwirkle-dark);
+  box-shadow: 0 2px 12px var(--qwirkle-glow);
+}
+.rules-tab.active[data-tab="contree"] {
+  background: linear-gradient(135deg, var(--contree), var(--contree-dark));
+  border-color: var(--contree-dark);
+  box-shadow: 0 2px 12px var(--contree-glow);
+}
 
 /* top navigation tabs (Home / Stats) — filled pill for the active tab */
 .nav-tabs {
@@ -966,6 +997,16 @@ input:focus {
   box-shadow: 0 2px 12px var(--timesup-glow);
   color: var(--ink);
 }
+#versionFilter button.active[data-v="qwirkle"] {
+  background: linear-gradient(135deg, var(--qwirkle), var(--qwirkle-dark));
+  border-color: var(--qwirkle-dark);
+  box-shadow: 0 2px 12px var(--qwirkle-glow);
+}
+#versionFilter button.active[data-v="contree"] {
+  background: linear-gradient(135deg, var(--contree), var(--contree-dark));
+  border-color: var(--contree-dark);
+  box-shadow: 0 2px 12px var(--contree-glow);
+}
 .stat-metric-select {
   appearance: none;
   -webkit-appearance: none;
@@ -1022,6 +1063,21 @@ input:focus {
 .mode-tab:active {
   transform: scale(0.96);
 }
+/* locked conversion (started game can't switch to/from Qwirkle) */
+.mode-tab:disabled,
+.mode-tab.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.mode-tab:disabled:hover,
+.mode-tab.disabled:hover {
+  filter: none;
+}
+.mode-tab:disabled:active,
+.mode-tab.disabled:active {
+  transform: none;
+}
 /* active tab adopts the colors (and glow) of its associated mode badge */
 .mode-tab.active {
   color: #fff;
@@ -1047,6 +1103,16 @@ input:focus {
   box-shadow: 0 2px 12px var(--timesup-glow);
   color: var(--ink);
 }
+.mode-tab.active[data-mode="qwirkle"] {
+  background: linear-gradient(135deg, var(--qwirkle), var(--qwirkle-dark));
+  border-color: var(--qwirkle-dark);
+  box-shadow: 0 2px 12px var(--qwirkle-glow);
+}
+.mode-tab.active[data-mode="contree"] {
+  background: linear-gradient(135deg, var(--contree), var(--contree-dark));
+  border-color: var(--contree-dark);
+  box-shadow: 0 2px 12px var(--contree-glow);
+}
 .badge.mode-classic {
   background: linear-gradient(135deg, var(--classic), var(--classic-dark));
   color: #fff;
@@ -1062,6 +1128,14 @@ input:focus {
 .badge.mode-timesup {
   background: linear-gradient(135deg, var(--timesup), var(--timesup-dark));
   color: var(--ink);
+}
+.badge.mode-qwirkle {
+  background: linear-gradient(135deg, var(--qwirkle), var(--qwirkle-dark));
+  color: #fff;
+}
+.badge.mode-contree {
+  background: linear-gradient(135deg, var(--contree), var(--contree-dark));
+  color: #fff;
 }
 
 /* rules page */
@@ -1102,6 +1176,10 @@ input:focus {
   align-items: center;
   gap: 1rem 0.5rem;
   flex-wrap: wrap;
+  /* keep the header (and its open kebab menu) above the following panels,
+     while staying below modals (20) and toasts (30) */
+  position: relative;
+  z-index: 5;
 }
 .game-head h2 {
   margin: 0;
@@ -1187,7 +1265,7 @@ input:focus {
   position: absolute;
   top: calc(100% + 0.375rem);
   right: 0;
-  z-index: 15;
+  z-index: 40;
   min-width: 11rem;
   display: flex;
   flex-direction: column;
@@ -1412,6 +1490,7 @@ table.score .eliminated-row .player-name {
 }
 .total-cell .crown {
   display: inline-block;
+  color: var(--gold-dark);
   animation: crown-bounce 1.5s infinite;
 }
 
@@ -1435,6 +1514,276 @@ tfoot td .btn-icon {
   letter-spacing: 0.5px;
   width: 100%;
   max-width: 27.5rem;
+}
+
+/* turn-based action bar (Qwirkle): score button + "Terminer" side by side */
+.new-scores-bar.turn-bar {
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+}
+.new-scores-bar.turn-bar .btn-big {
+  width: auto;
+  max-width: none;
+  flex: 1 1 auto;
+}
+.new-scores-bar.turn-bar .btn-end {
+  flex: 0 0 auto;
+  padding: 1.125rem 1.5rem;
+  font-size: 1.1rem;
+}
+
+/* "Qui commence ?" starter picker */
+.starter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.starter-item {
+  width: 100%;
+  justify-content: center;
+  min-height: 3.25rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+/* single-player turn entry */
+.turn-meta {
+  color: var(--muted);
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+.turn-entry .entry-controls {
+  width: 100%;
+}
+.turn-entry .cell-input {
+  flex: 1;
+  font-size: 1.4rem;
+}
+
+/* turn-by-turn details table (Qwirkle) */
+.turn-table .turn-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  padding: 0 0.4rem;
+  border-radius: var(--r-round);
+  background: var(--teal-bg);
+  color: var(--teal-dark);
+  font-weight: 800;
+}
+.turn-table .cell-box {
+  position: relative;
+}
+.turn-table .draw-tag {
+  position: absolute;
+  top: -0.5rem;
+  right: -0.5rem;
+  background: var(--coral);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0.25rem 0.375rem;
+  border-radius: var(--r-round);
+  box-shadow: var(--shadow-sm);
+}
+.turn-empty {
+  text-align: center;
+  padding: 1.25rem 0.5rem;
+}
+
+/* ---------- Contrée ---------- */
+.contree-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+.dealer-note {
+  text-align: center;
+  color: var(--teal-dark);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+/* current bid shown as a white card above the scoreboard (no left border):
+   dealer on the left, bid opposed on the right */
+.bid-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  justify-content: space-between;
+  font-size: 0.95rem;
+}
+.bid-dealer {
+  color: var(--teal-dark);
+  font-weight: 700;
+}
+.bid-current {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+/* score dialog: bid recap styled like .bid-current (no card), centered */
+.deal-bid {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+}
+/* Belote (+20) toggle, in the green Contrée accent */
+.belote-btn {
+  white-space: nowrap;
+  color: var(--contree-dark);
+  border-color: rgba(111, 158, 105, 0.5);
+}
+.belote-btn.active {
+  background: var(--contree);
+  color: #fff;
+  border-color: var(--contree);
+  box-shadow: 0 2px 8px var(--contree-glow);
+}
+/* contract made / failed message */
+.contract-msg {
+  margin-top: 0.875rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: var(--r-md);
+  background: rgba(39, 174, 96, 0.12);
+  color: #1e7e44;
+  font-weight: 700;
+  font-size: 0.875rem;
+  text-align: center;
+}
+.contract-msg.fail {
+  background: rgba(239, 108, 74, 0.14);
+  color: var(--coral-dark);
+}
+/* current-bid banner (score dialog) */
+.bid-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: center;
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--teal-bg);
+  border: 1.5px solid rgba(111, 158, 105, 0.3);
+  border-left: 6px solid var(--contree);
+  border-radius: var(--r-lg);
+  font-size: 0.95rem;
+}
+.bid-label {
+  font-weight: 800;
+  color: var(--contree-dark);
+  margin-right: 0.25rem;
+}
+.bid-contract {
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: var(--text);
+}
+.suit,
+.suit-sym {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+.suit {
+  color: var(--ink); /* black suits ♠ ♣ */
+}
+.suit.red {
+  color: #d4322f; /* red suits ♥ ♦ */
+}
+.bid-coinche {
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--r-round);
+  background: var(--coral);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+/* bid dialog: suit / team / coinche pickers */
+/* suits: two per row, each in its real colour (red ♥ ♦, black ♠ ♣) */
+.suit-picker {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+.suit-btn {
+  appearance: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 3rem;
+  border: 2px solid var(--teal-light);
+  background: var(--card);
+  color: var(--ink); /* black suits (symbol + label) */
+  border-radius: var(--r-md);
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+.suit-btn.red {
+  color: #d4322f; /* red suits at rest */
+}
+/* active suit takes its real colour: black for ♠ ♣, red for ♥ ♦ */
+.suit-btn.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+  box-shadow: var(--shadow-md);
+}
+.suit-btn.red.active {
+  background: #d4322f;
+  border-color: #d4322f;
+  color: #fff;
+}
+.pick-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.pick-btn {
+  flex: 1;
+  appearance: none;
+  cursor: pointer;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid var(--teal-light);
+  background: var(--card);
+  color: var(--teal-dark);
+  border-radius: var(--r-round);
+  font-weight: 800;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+.pick-btn.active {
+  border-color: var(--contree-dark);
+  background: var(--contree);
+  color: #fff;
+  box-shadow: 0 2px 10px var(--contree-glow);
+}
+/* contract segmented control: buttons sized to content, wrapping when needed */
+.contract-picker .pick-btn {
+  flex: 0 0 auto;
+  min-height: 2.5rem;
+  padding: 0.5rem 1rem;
+}
+/* running total under each deal's points in the details table */
+.run-total {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--muted);
 }
 
 /* round entry */
@@ -1465,6 +1814,14 @@ tfoot td .btn-icon {
   display: flex;
   align-items: center;
   gap: 1rem 0.5rem;
+}
+
+/* ± sign toggle for games that allow negative scores (Skyjo) */
+.sign-btn {
+  font-weight: 800;
+  font-size: 1.1rem;
+  min-width: 2.75rem;
+  color: var(--teal-dark);
 }
 
 /* Flip7 bonus toggle button — sky blue */
@@ -1911,7 +2268,7 @@ body:has(.overlay) {
 /* ---------- responsive (phones) ---------- */
 @media (max-width: 40rem) {
   main {
-    padding: 1rem 0 5.25rem;
+    padding: 1rem 0px;
   }
   main > * {
     padding-left: 0.875rem;

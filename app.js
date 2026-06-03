@@ -31,6 +31,7 @@ const RULESETS = {
     target: 100,
     scoreOrder: "asc", // lower total ranks first
     entry: "number",
+    negatives: true, // scores can be negative (adds a ± sign toggle)
     cellValue(cell) {
       return Number(cell && cell.points) || 0;
     },
@@ -44,7 +45,36 @@ const RULESETS = {
       return Number(cell && cell.points) || 0;
     },
   },
+  qwirkle: {
+    manualEnd: true, // no score target / fixed rounds: ended by the user
+    turnBased: true, // scores entered one player at a time, in turn order
+    scoreOrder: "desc", // highest total wins
+    entry: "number",
+    cellValue(cell) {
+      return Number(cell && cell.points) || 0;
+    },
+  },
+  contree: {
+    scoreOrder: "desc", // highest team total wins
+    entry: "contree", // bespoke flow: dealer → bid → team scores
+    teams: true, // 4 players in two fixed teams (A: seats 1&3, B: 2&4)
+    configurableTarget: true, // score target is chosen at creation
+    cellValue(cell) {
+      return Number(cell && cell.points) || 0;
+    },
+  },
 };
+
+// Trump suits for Contrée bids (4 colours, icons via Unicode pips).
+const CONTREE_SUITS = [
+  { key: "spades", label: "Pique", sym: "♠", red: false },
+  { key: "hearts", label: "Cœur", sym: "♥", red: true },
+  { key: "diamonds", label: "Carreau", sym: "♦", red: true },
+  { key: "clubs", label: "Trèfle", sym: "♣", red: false },
+];
+function contreeSuit(key) {
+  return CONTREE_SUITS.find((s) => s.key === key) || null;
+}
 
 // Wording for the competing entity, per ruleset (default: players).
 const UNITS = {
@@ -75,11 +105,21 @@ const MODES = {
     ruleset: "flip7",
     rules: () => rulesVengeanceHTML(),
   },
+  qwirkle: {
+    label: "Qwirkle",
+    ruleset: "qwirkle",
+    rules: () => rulesQwirkleHTML(),
+  },
   skyjo: { label: "Skyjo", ruleset: "skyjo", rules: () => rulesSkyjoHTML() },
   timesup: {
     label: "Time's Up!",
     ruleset: "timesup",
     rules: () => rulesTimesUpHTML(),
+  },
+  contree: {
+    label: "Contrée",
+    ruleset: "contree",
+    rules: () => rulesContreeHTML(),
   },
 };
 const DEFAULT_MODE = "classic";
@@ -333,17 +373,60 @@ function playerTotal(game, playerId) {
   );
 }
 // Standings sorted by the game's order (Flip 7: highest first; Skyjo: lowest
-// first). The leader — best by the game's rules — is always s[0].
+// first). The leader — best by the game's rules — is always s[0]. Team games
+// (Contrée) rank the two teams instead of individual players, so isGameOver /
+// winners (which only read {id, total}) keep working unchanged.
 function standings(game) {
-  const asc = defFor(game).scoreOrder === "asc";
+  const def = defFor(game);
+  if (def.teams) {
+    return teamsOf(game)
+      .map((t) => ({ ...t, total: teamTotal(game, t.id) }))
+      .sort((a, b) => b.total - a.total);
+  }
+  const asc = def.scoreOrder === "asc";
   return game.players
     .map((p) => ({ ...p, total: playerTotal(game, p.id) }))
     .sort((a, b) => (asc ? a.total - b.total : b.total - a.total));
 }
+
+/* ---------- teams (Contrée) ---------- */
+// The two fixed teams: A = seats 1 & 3, B = seats 2 & 4 (in roster order).
+function teamsOf(game) {
+  const ps = game.players;
+  return [
+    { id: "A", name: teamName(game, "A"), members: [ps[0], ps[2]].filter(Boolean) },
+    { id: "B", name: teamName(game, "B"), members: [ps[1], ps[3]].filter(Boolean) },
+  ];
+}
+// A team's display name: its members joined by "&", or "Équipe A/B" as fallback.
+function teamName(game, id) {
+  const ps = game.players;
+  const members = (id === "A" ? [ps[0], ps[2]] : [ps[1], ps[3]])
+    .filter(Boolean)
+    .map((p) => p.name)
+    .filter((n) => n && n.trim());
+  return members.length ? members.join(" & ") : id === "A" ? "Équipe A" : "Équipe B";
+}
+// A team's cumulative score across all played deals.
+function teamTotal(game, id) {
+  return game.rounds.reduce(
+    (sum, r) => sum + (Number(r.scores && r.scores[id]) || 0),
+    0,
+  );
+}
+// The player dealing the current deal: the chosen first dealer rotated by the
+// number of deals already played (deal passes clockwise, in roster order).
+function currentDealer(game) {
+  if (!game.dealer) return null;
+  const order = turnOrder({ players: game.players, starter: game.dealer });
+  return order.length ? order[game.rounds.length % order.length] : null;
+}
 // Is the game finished? Target-based games (Flip 7, Skyjo) end once any player
-// reaches the target; round-limited games (Time's Up!) end after N rounds.
+// reaches the target; round-limited games (Time's Up!) end after N rounds;
+// manual-end games (Qwirkle) end when the user closes them (game.ended).
 function isGameOver(game, s) {
   const def = defFor(game);
+  if (def.manualEnd) return !!game.ended; // user closes the game by hand
   if (def.rounds) return game.rounds.length >= def.rounds;
   return s.some((p) => p.total >= game.target);
 }
@@ -371,6 +454,73 @@ function winnersLabel(ws) {
 // Single representative winner (or null). Truthy means the game is over.
 function winner(game) {
   return winners(game)[0] || null;
+}
+
+/* ---------- turn-based games (Qwirkle) ---------- */
+// The roster rotated so the chosen starter plays first; falls back to the
+// roster order when no starter has been picked yet.
+function turnOrder(game) {
+  const ps = game.players;
+  const i = ps.findIndex((p) => p.id === game.starter);
+  return i <= 0 ? ps.slice() : ps.slice(i).concat(ps.slice(0, i));
+}
+// The player whose turn it is now, or null if the game hasn't started. The next
+// player is the one following the last player who scored (robust to deleting a
+// turn from the details screen); before any turn, it's the starter.
+function currentPlayer(game) {
+  if (!game.starter) return null;
+  const order = turnOrder(game);
+  if (!order.length) return null;
+  if (!game.rounds.length) return order[0];
+  const last = game.rounds[game.rounds.length - 1];
+  const lastPid = Object.keys(last.scores)[0];
+  const idx = order.findIndex((p) => p.id === lastPid);
+  return idx < 0
+    ? order[game.rounds.length % order.length]
+    : order[(idx + 1) % order.length];
+}
+// Noun for the scoring unit: "donne" (Contrée), "tour" (turn-based), else
+// "manche".
+function roundNoun(game) {
+  const def = defFor(game);
+  if (def.teams) return "donne";
+  return def.turnBased ? "tour" : "manche";
+}
+// Count label with a variable plural, e.g. "1 manche" / "5 tours".
+function roundCountLabel(game, n) {
+  const noun = roundNoun(game);
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+// Numbered label for the round/turn in progress, e.g. "Manche 5" / "Tour 5".
+function roundNumberLabel(game, n) {
+  const noun = roundNoun(game);
+  return `${noun.charAt(0).toUpperCase()}${noun.slice(1)} ${n}`;
+}
+// Short status note shown on a game card / header for an ongoing game.
+function roundNoteFor(game) {
+  const def = defFor(game);
+  if (def.teams) return game.dealer ? `Donne ${game.rounds.length + 1}` : "À démarrer";
+  if (!def.turnBased) return `Manche ${game.rounds.length + 1}`;
+  if (!game.starter) return "À démarrer";
+  const cur = currentPlayer(game);
+  return cur ? `Tour de ${esc(cur.name)}` : "En cours";
+}
+// Close a manual-end game by hand and crown the current leader(s).
+async function endGamePrompt(game) {
+  const lead = standings(game)[0];
+  const ok = await confirmDialog({
+    title: "Terminer la partie ?",
+    body: `La partie sera close et la victoire attribuée au joueur en tête${lead ? ` (actuellement ${lead.name}, ${lead.total} pts)` : ""}.`,
+    confirmLabel: "Terminer",
+    cancelLabel: "Retour",
+  });
+  if (!ok) return;
+  const g = getGame(game.id);
+  const beforeWinnerId = (winner(g) || {}).id || null;
+  g.ended = true;
+  upsertGame(g);
+  go("game", { id: game.id });
+  celebrateIfNewWinner(beforeWinnerId, g);
 }
 
 // Competition-style rank labels for an ALREADY-SORTED list. `tied(prev, cur)`
@@ -936,6 +1086,7 @@ function rulesClassicHTML() {
     <ul>
       <li>Saisissez le <b>total de chaque joueur</b> pour chaque manche.</li>
       <li>Cochez <b>« Flip 7 (+15) »</b> pour ajouter le bonus, ou <b>« Éliminé »</b> pour marquer 0.</li>
+      <li>Dans le <b>détail des scores</b>, tapez <b>« +15 »</b> dans une case (ex. « 10+15 ») pour activer ou retirer le bonus Flip 7.</li>
     </ul>`;
 }
 
@@ -985,6 +1136,7 @@ function rulesVengeanceHTML() {
     <ul>
       <li>Saisissez le total final de chaque joueur pour chaque manche — toutes les variantes (÷2, négatifs, mode Brutal) sont donc gérées par votre saisie.</li>
       <li>Cochez <b>« Flip 7 (+15) »</b> pour le bonus, ou <b>« Éliminé »</b> pour marquer 0.</li>
+      <li>Dans le <b>détail des scores</b>, tapez <b>« +15 »</b> dans une case (ex. « 10+15 ») pour activer ou retirer le bonus Flip 7.</li>
     </ul>`;
 }
 
@@ -1019,7 +1171,7 @@ function rulesSkyjoHTML() {
 
     <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
     <ul>
-      <li>Saisissez le <b>score de chaque joueur pour chaque manche</b> (la valeur peut être <b>négative</b>).</li>
+      <li>Saisissez le <b>score de chaque joueur pour chaque manche</b> ; le bouton <b>±</b> permet d'entrer un score <b>négatif</b>.</li>
       <li>Le classement met le <b>plus petit total en tête</b> ; le vainqueur prévisionnel est signalé d'une couronne dès qu'un joueur atteindrait 100.</li>
     </ul>`;
 }
@@ -1056,6 +1208,70 @@ function rulesTimesUpHTML() {
       <li>Saisissez les <b>noms d'équipes</b> dans les joueurs.</li>
       <li>À chaque manche, entrez le <b>nombre de cartes devinées</b> par chaque équipe.</li>
       <li>La partie se termine automatiquement après <b>3 manches</b> ; le plus haut total gagne.</li>
+    </ul>`;
+}
+
+function rulesQwirkleHTML() {
+  return `
+    <p class="rules-intro"><b>Qwirkle</b> est un jeu de tuiles où l'on forme des lignes partageant une même <b>couleur</b> ou une même <b>forme</b>. On marque des points à chaque pose ; à la fin, le joueur au <b>plus haut total</b> l'emporte.</p>
+
+    <h3><i class="fa-regular fa-bullseye"></i> But du jeu</h3>
+    <p>Marquer un <b>maximum de points</b> en posant des tuiles pour créer ou prolonger des lignes de même couleur (formes différentes) ou de même forme (couleurs différentes).</p>
+
+    <h3><i class="fa-regular fa-shapes"></i> Le matériel</h3>
+    <ul>
+      <li><b>108 tuiles</b> : 6 formes × 6 couleurs, chacune en 3 exemplaires.</li>
+      <li>Chaque joueur garde <b>6 tuiles</b> en main, piochées dans le sac.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-arrows-rotate"></i> Déroulement d'un tour</h3>
+    <ul>
+      <li>À son tour, on pose une ou plusieurs tuiles <b>alignées</b> qui partagent la couleur <b>ou</b> la forme (jamais de doublon dans une même ligne), puis on complète sa main à 6.</li>
+      <li>On peut aussi <b>échanger</b> tout ou partie de sa main (on passe alors son tour).</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-calculator"></i> Décompte</h3>
+    <ul>
+      <li>On marque <b>1 point par tuile</b> de chaque ligne créée ou prolongée par sa pose (une tuile au croisement de deux lignes compte dans les deux).</li>
+      <li><b>Qwirkle</b> : compléter une ligne de <b>6 tuiles</b> rapporte <b>6 points bonus</b> (soit 12 pour cette ligne).</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-trophy"></i> Fin de la partie</h3>
+    <p>La partie s'arrête quand un joueur <b>pose sa dernière tuile</b> alors que le sac est vide : il gagne <b>6 points bonus</b>. Le <b>plus haut total</b> gagne.</p>
+
+    <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
+    <ul>
+      <li>Au démarrage, choisissez <b>« Qui commence ? »</b> ; les tours s'enchaînent ensuite <b>dans l'ordre des joueurs</b>.</li>
+      <li>À chaque tour, saisissez le <b>score du joueur courant</b> (« Score de … »), puis on passe automatiquement au suivant. Utilisez <b>« A pioché »</b> s'il a pioché sans marquer (0 point).</li>
+      <li>Il n'y a pas de fin automatique : appuyez sur <b>« Terminer »</b> quand la partie est finie ; le joueur en tête est alors couronné.</li>
+    </ul>`;
+}
+
+function rulesContreeHTML() {
+  return `
+    <p class="rules-intro">La <b>Contrée</b> (ou coinche) est un jeu de plis par <b>équipes de 2</b>. Une équipe annonce un <b>contrat</b> (un nombre de points dans une couleur d'atout) ; si elle le réalise, elle marque, sinon l'adversaire empoche. Première équipe au <b>score cible</b> gagne.</p>
+
+    <h3><i class="fa-regular fa-users"></i> Mise en place</h3>
+    <ul>
+      <li><b>4 joueurs</b>, 2 équipes : les joueurs <b>1 & 3</b> contre les joueurs <b>2 & 4</b> (assis en alternance).</li>
+      <li>On définit un <b>score cible</b> à atteindre (souvent 1000 ou 2000).</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-gavel"></i> Les enchères</h3>
+    <ul>
+      <li>À tour de rôle, on annonce un <b>contrat</b> : une valeur (80, 90… 160, capot) et une <b>couleur d'atout</b> (♠ ♥ ♦ ♣).</li>
+      <li>Les adversaires peuvent <b>contrer</b> (×2) ; l'équipe qui prend peut <b>surcontrer</b> (×4).</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-share-from-square"></i> La distribution</h3>
+    <p>On choisit qui <b>distribue en premier</b> ; la distribution tourne ensuite dans l'ordre des joueurs à chaque donne.</p>
+
+    <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
+    <ul>
+      <li>À la création : définissez le <b>score cible</b> et les <b>4 joueurs</b> (l'ordre fixe les équipes : 1 & 3 / 2 & 4).</li>
+      <li>Sur la partie : choisissez <b>qui distribue</b>, puis saisissez la <b>mise</b> (contrat 80→160 ou <b>Capot</b>, atout, équipe qui prend, contré/surcontré). Elle est rappelée en haut du tableau.</li>
+      <li>Pour le score, entrez les <b>points de plis</b> d'une équipe (l'autre se complète à <b>160</b>, arrondi à la dizaine) et signalez une éventuelle <b>Belote (+20)</b>.</li>
+      <li>L'app <b>calcule automatiquement</b> le score de la donne (contrat réussi/chuté, contré ×2, surcontré ×4, capot) et indique si le contrat est tenu. La distribution passe ensuite au joueur suivant.</li>
     </ul>`;
 }
 
@@ -1241,7 +1457,7 @@ function renderHome() {
     const names = g.players.map((p) => p.name).join(", ");
     let roundsNote = "";
     if (!ongoing) {
-      roundsNote = ` · ${g.rounds.length} manche${g.rounds.length === 1 ? "" : "s"}`;
+      roundsNote = ` · ${roundCountLabel(g, g.rounds.length)}`;
       const dur = gameDuration(g);
       if (dur != null) roundsNote += ` · ${fmtDuration(dur)}`;
     }
@@ -1251,7 +1467,7 @@ function renderHome() {
         ? `<span class="badge rank1"><i class="fa-regular fa-trophy"></i> ${winnersLabel(ws)}</span>`
         : `<div class="status-cell">
              <span class="badge ongoing">En cours <i class="fa-regular fa-spinner-third fa-spin"></i></span>
-             <span class="round-note">Manche ${g.rounds.length + 1}</span>
+             <span class="round-note">${roundNoteFor(g)}</span>
            </div>`;
     const card = el(`
       <div class="game-card ${g.cancelled ? "cancelled" : w ? "done" : "ongoing"}">
@@ -1280,6 +1496,10 @@ function renderPlayerRows(
   // placeholder may be a function so it tracks the dialog's selected game.
   const phText = () =>
     typeof placeholder === "function" ? placeholder() : placeholder;
+  // allowRemove may be a function so it can react to the selected game (Contrée
+  // has a fixed 4-player roster: no remove, but rows stay reorderable).
+  const canRemove = () =>
+    typeof allowRemove === "function" ? allowRemove() : allowRemove;
   // Autocompletion source; may be a function so it tracks the selected game
   // (player names vs team names). A custom dropdown is used instead of
   // <datalist>, whose mobile support is unreliable.
@@ -1375,7 +1595,7 @@ function renderPlayerRows(
             </div>
             <div class="player-error" hidden></div>
           </div>
-          ${allowRemove ? `<button class="btn btn-danger btn-icon" title="Retirer"><i class="fa-regular fa-xmark"></i></button>` : ""}
+          ${canRemove() ? `<button class="btn btn-danger btn-icon" title="Retirer"><i class="fa-regular fa-xmark"></i></button>` : ""}
         </div>`);
       const input = row.querySelector("input");
       input.addEventListener("input", (e) => {
@@ -1383,7 +1603,7 @@ function renderPlayerRows(
         revalidate(i);
       });
       wireSuggestions(input, i);
-      if (allowRemove) {
+      if (canRemove()) {
         row.querySelector("button").addEventListener("click", () => {
           players.splice(i, 1);
           if (!players.length) players.push({ id: uid(), name: "" });
@@ -1487,10 +1707,15 @@ function openSetupDialog(opts = {}) {
         <label>Type de partie</label>
         <div class="mode-tabs" id="modeTabs">${modeTabsHTML()}</div>
       </div>
+      <div class="field" id="targetField" hidden>
+        <label for="targetInput">Score cible</label>
+        <input type="number" inputmode="numeric" class="cell-input target-input" id="targetInput" placeholder="2000" value="2000" />
+      </div>
       <div class="field">
         <label id="playersLabel">Joueurs</label>
         <div class="player-rows" id="rows"></div>
         <button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>
+        <p class="teams-hint" id="teamsHint" hidden></p>
       </div>
     </div>
     <div class="scores-dialog-foot">
@@ -1502,6 +1727,10 @@ function openSetupDialog(opts = {}) {
   const rowsEl = modal.querySelector("#rows");
   const addBtn = modal.querySelector("#addPlayer");
   const playersLabel = modal.querySelector("#playersLabel");
+  const targetField = modal.querySelector("#targetField");
+  const targetInput = modal.querySelector("#targetInput");
+  const teamsHint = modal.querySelector("#teamsHint");
+  const isTeams = () => rulesetOf(mode).teams;
   // Reflect the selected game's wording (players vs teams).
   const applyUnit = () => {
     const u = unitOf(mode);
@@ -1510,6 +1739,27 @@ function openSetupDialog(opts = {}) {
     rowsEl
       .querySelectorAll('input[type="text"]')
       .forEach((i) => (i.placeholder = u.placeholder));
+  };
+  // Contrée: A = seats 1 & 3, B = seats 2 & 4. Refresh the live preview.
+  const updateTeamsHint = () => {
+    if (!isTeams()) return (teamsHint.hidden = true);
+    teamsHint.hidden = false;
+    const nm = (i) => (players[i] && players[i].name.trim()) || `Joueur ${i + 1}`;
+    teamsHint.innerHTML = `<b>Équipe A</b> : ${esc(nm(0))} & ${esc(nm(2))} · <b>Équipe B</b> : ${esc(nm(1))} & ${esc(nm(3))}`;
+  };
+  // Show/hide the score-target field and enforce a fixed 4-player roster for
+  // team games (reorderable, but no add/remove).
+  const applyModeLayout = () => {
+    targetField.hidden = !rulesetOf(mode).configurableTarget;
+    if (isTeams()) {
+      while (players.length < 4) players.push({ id: uid(), name: "" });
+      if (players.length > 4) players.length = 4;
+      addBtn.style.display = "none";
+    } else {
+      addBtn.style.display = "";
+    }
+    drawRows();
+    updateTeamsHint();
   };
 
   const modeTabs = modal.querySelector("#modeTabs");
@@ -1522,15 +1772,21 @@ function openSetupDialog(opts = {}) {
       mode = b.dataset.mode;
       syncModeTabs();
       applyUnit();
+      applyModeLayout();
     }),
   );
   syncModeTabs();
 
   const drawRows = renderPlayerRows(rowsEl, players, {
+    allowRemove: () => !isTeams(),
     placeholder: () => unitOf(mode).placeholder,
     suggestions: () => placePlayerNames(place, unitKeyOf(mode)),
   });
   applyUnit();
+  applyModeLayout();
+  // Keep the teams preview in sync with name edits and reordering.
+  rowsEl.addEventListener("input", updateTeamsHint);
+  rowsEl.addEventListener("pointerup", () => setTimeout(updateTeamsHint, 0));
   modal.querySelector("#addPlayer").addEventListener("click", () => {
     players.push({ id: uid(), name: "" });
     drawRows();
@@ -1546,16 +1802,27 @@ function openSetupDialog(opts = {}) {
   });
 
   modal.querySelector("#start").addEventListener("click", () => {
+    const def = rulesetOf(mode);
     const valid = players.filter((p) => p.name.trim());
-    if (valid.length < 2) return toast("Ajoutez au moins 2 joueurs");
+    if (def.teams) {
+      if (valid.length !== 4)
+        return toast("La Contrée se joue à exactement 4 joueurs");
+    } else if (valid.length < 2) {
+      return toast("Ajoutez au moins 2 joueurs");
+    }
     const dup = firstDuplicateName(valid.map((p) => p.name));
     if (dup) return toast(`« ${dup} » est présent en double`);
+    let target = def.target;
+    if (def.configurableTarget) {
+      target = Number(targetInput.value) || 0;
+      if (target <= 0) return toast("Indiquez un score cible valide");
+    }
     const now = Date.now();
     const game = {
       id: uid(),
       name: gameNameFromDate(now),
       createdAt: now,
-      target: rulesetOf(mode).target,
+      target,
       mode,
       place,
       players: valid.map((p) => ({ id: p.id, name: p.name.trim() })),
@@ -1585,10 +1852,19 @@ function renderGame(id) {
     dur != null
       ? `<span class="target-note" id="durationChip"><i class="fa-regular fa-clock"></i> <span class="dur-val">${fmtDuration(dur)}</span></span>`
       : "";
-  // Round count shown on the meta row below the title.
-  // Ongoing: the round being played; finished/cancelled: total rounds played.
-  const roundCount = w ? game.rounds.length : game.rounds.length + 1;
-  const roundNum = `<span class="game-round-num">${roundCount} manche${roundCount === 1 ? "" : "s"}</span>`;
+  // Score target chip (games with a chosen target, e.g. Contrée).
+  const targetChip =
+    defFor(game).configurableTarget && game.target
+      ? `<span class="target-note"><i class="fa-regular fa-bullseye"></i> ${game.target} pts</span>`
+      : "";
+  // Round/turn label shown on the meta row below the title. Ongoing: the
+  // numbered round/turn in progress ("Manche 5" / "Tour 5"); finished or
+  // cancelled: the total played with a variable plural ("5 manches" / "5 tours").
+  const roundNum = `<span class="game-round-num">${
+    w
+      ? roundCountLabel(game, game.rounds.length)
+      : roundNumberLabel(game, game.rounds.length + 1)
+  }</span>`;
 
   const backRow = el(`
     <div class="row">
@@ -1606,12 +1882,14 @@ function renderGame(id) {
       <div class="game-meta-row">
         ${roundNum}
         ${durationChip}
+        ${targetChip}
         <button class="btn btn-ghost btn-sm ml-auto" id="editPlayers">Modifier</button>
         <div class="kebab">
           <button class="btn btn-ghost btn-sm btn-icon" id="moreBtn" aria-label="Plus d'options" aria-haspopup="true" aria-expanded="false"><i class="fa-regular fa-ellipsis"></i></button>
           <div class="kebab-menu" id="moreMenu" hidden>
             <button class="kebab-item kebab-edit" id="editKebab"><i class="fa-regular fa-pen-to-square"></i> Modifier</button>
             <button class="kebab-item" id="shareBtn"><i class="fa-regular fa-share-nodes"></i> Partager</button>
+            ${defFor(game).manualEnd && !defFor(game).turnBased && !w && !game.cancelled && game.rounds.length ? `<button class="kebab-item" id="endGame"><i class="fa-regular fa-flag-checkered"></i> Terminer la partie</button>` : ""}
             ${game.cancelled ? "" : `<button class="kebab-item" id="cancel"><i class="fa-regular fa-ban"></i> Annuler</button>`}
             <button class="kebab-item" id="del"${w ? "" : ' disabled title="Une partie en cours ne peut pas être supprimée — annulez-la d\'abord."'}><i class="fa-regular fa-trash-can"></i> Supprimer</button>
           </div>
@@ -1665,6 +1943,15 @@ function renderGame(id) {
       if (e && e.name !== "AbortError") toast("Partage impossible");
     }
   });
+
+  // Manual-end games: close the game and crown the current leader(s).
+  const endBtn = head.querySelector("#endGame");
+  if (endBtn) {
+    endBtn.addEventListener("click", () => {
+      closeMenu();
+      endGamePrompt(game);
+    });
+  }
 
   const cancelBtn = head.querySelector("#cancel");
   if (cancelBtn) {
@@ -1728,19 +2015,30 @@ function renderGame(id) {
     app.appendChild(wrapPanel(banner));
   }
 
-  app.appendChild(wrapPanel(buildSummary(game, st, w)));
-
-  // Hide score entry once the game is won.
-  if (!w) {
-    const hasDraft = !!game.draftRound;
-    const actions = el(`
-      <div class="new-scores-bar">
-        <button class="btn btn-primary btn-big" id="newScores"><i class="fa-regular fa-${hasDraft ? "pen-to-square" : "plus"}"></i> ${hasDraft ? "Reprendre la saisie" : "Nouveaux scores"}</button>
-      </div>`);
-    actions
-      .querySelector("#newScores")
-      .addEventListener("click", () => openScoresDialog(game));
-    app.appendChild(actions);
+  if (defFor(game).teams) {
+    // Dealer (and the current bid, if any) sit above the scoreboard in a card.
+    if (!w && game.dealer)
+      app.appendChild(wrapPanel(buildBidInfo(game)));
+    app.appendChild(wrapPanel(buildContreeSummary(game)));
+    if (!w) app.appendChild(buildContreeBar(game));
+  } else {
+    app.appendChild(wrapPanel(buildSummary(game, st, w)));
+    // Hide score entry once the game is won.
+    if (!w) {
+      if (defFor(game).turnBased) {
+        app.appendChild(buildTurnBar(game));
+      } else {
+        const hasDraft = !!game.draftRound;
+        const actions = el(`
+          <div class="new-scores-bar">
+            <button class="btn btn-primary btn-big" id="newScores"><i class="fa-regular fa-${hasDraft ? "pen-to-square" : "plus"}"></i> ${hasDraft ? "Reprendre la saisie" : "Nouveaux scores"}</button>
+          </div>`);
+        actions
+          .querySelector("#newScores")
+          .addEventListener("click", () => openScoresDialog(game));
+        app.appendChild(actions);
+      }
+    }
   }
 
   const linksWrap = el(`<div class="rules-link-wrap game-links-row">
@@ -1771,17 +2069,32 @@ function buildSummary(game, st, w) {
   );
   const tbody = el(`<tbody></tbody>`);
   const labels = rankLabels(st, (a, b) => a.total === b.total);
-  // In-progress (pre-saved) round: show each player's projected total in muted.
-  const draft = game.draftRound || {};
+  // In-progress (pre-saved) entry: show each player's projected total in muted.
   const def = defFor(game);
-  const hasDraftFor = (p) => {
+  const draft = game.draftRound || {};
+  // Turn-based games pre-save a single player's turn (the current player).
+  const turnCur = def.turnBased ? currentPlayer(game) : null;
+  const turnDraft =
+    turnCur && turnDraftHasData(game.draftTurn) ? game.draftTurn : null;
+  // The pending draft cell for a player, or null if they have nothing entered.
+  const draftCellFor = (p) => {
+    if (def.turnBased)
+      return turnDraft && p.id === turnCur.id
+        ? {
+            points: turnDraft.drawn ? 0 : Number(turnDraft.points) || 0,
+            drawn: !!turnDraft.drawn,
+          }
+        : null;
     const dc = draft[p.id];
-    return dc && ((dc.points !== "" && dc.points != null) || dc.flip7 || dc.bust);
+    return dc && ((dc.points !== "" && dc.points != null) || dc.flip7 || dc.bust)
+      ? dc
+      : null;
   };
+  const hasDraftFor = (p) => !!draftCellFor(p);
   const projected = {};
   st.forEach((p) => {
-    projected[p.id] =
-      p.total + (hasDraftFor(p) ? def.cellValue(draft[p.id]) : 0);
+    const dc = draftCellFor(p);
+    projected[p.id] = p.total + (dc ? def.cellValue(dc) : 0);
   });
   // Projected winner(s): only when the game isn't already won and a round is in
   // progress — the leader(s) under the game's rules once the target is reached
@@ -1813,14 +2126,18 @@ function buildSummary(game, st, w) {
     // A player marked "Éliminé" (bust) in the in-progress round: flag the row in
     // red with a tag and hide the projected total (it would just repeat p.total).
     const eliminated = !!(draft[p.id] && draft[p.id].bust);
+    // A Qwirkle draw (0 points) reuses Flip 7's "éliminé" row styling.
+    const drew = !!(turnDraft && turnCur && p.id === turnCur.id && turnDraft.drawn);
     let preview = "";
     if (eliminated) {
       preview = '<span class="elim-tag">éliminé.e</span>';
+    } else if (drew) {
+      preview = '<span class="elim-tag">Pioche</span>';
     } else if (hasDraftFor(p)) {
       preview = `<span class="score-preview"><i class="fa-regular fa-arrow-right-long"></i> ${projected[p.id]}${previewCrown}</span>`;
     }
     const tr = el(`
-      <tr class="${won ? "winner-row" : ""}${eliminated ? " eliminated-row" : ""}">
+      <tr class="${won ? "winner-row" : ""}${eliminated || drew ? " eliminated-row" : ""}">
         <td class="rank-col">${rankBadge}</td>
         <td class="player-name">${esc(p.name)}</td>
         <td class="total-cell"><span class="score-badge ${rankClass}">${p.total}${crown}</span>${preview}</td>
@@ -1864,10 +2181,95 @@ function renderDetails(id) {
       </div>`),
   );
 
-  app.appendChild(wrapPanel(buildTable(game, rankMap, w)));
+  app.appendChild(
+    wrapPanel(
+      defFor(game).teams
+        ? buildContreeTable(game)
+        : defFor(game).turnBased
+          ? buildTurnTable(game)
+          : buildTable(game, rankMap, w),
+    ),
+  );
+}
+
+// Details for a turn-based game (Qwirkle): one row per turn, in chronological
+// order, with the running total for the player who scored. Points stay editable
+// and each turn can be removed.
+function buildTurnTable(game) {
+  const def = defFor(game);
+  const wrap = el(`<div class="table-wrap"></div>`);
+  const table = el(`<table class="score turn-table"></table>`);
+  table.innerHTML = `<thead><tr><th class="rank-col">Tour</th><th class="player-name">${unitLabel(game.mode)}</th><th>Points</th><th>Total</th><th class="rank-col"></th></tr></thead>`;
+  const tbody = el(`<tbody></tbody>`);
+  const running = {}; // running total per player as turns accumulate
+
+  if (!game.rounds.length) {
+    tbody.appendChild(
+      el(
+        `<tr><td colspan="5" class="turn-empty muted">Aucun tour joué pour l'instant.</td></tr>`,
+      ),
+    );
+  }
+
+  game.rounds.forEach((r, i) => {
+    const pid = Object.keys(r.scores)[0];
+    const cell = r.scores[pid] || { points: 0 };
+    const p = game.players.find((x) => x.id === pid);
+    const name = p ? esc(p.name) : "—";
+    const val = def.cellValue(cell);
+    running[pid] = (running[pid] || 0) + val;
+    // A 0 means the player drew tiles instead of scoring — flag it like Flip 7's
+    // "+15" badge, but reading "Pioche".
+    const drawnTag = val === 0 ? '<span class="draw-tag">Pioche</span>' : "";
+    const tr = el(`
+      <tr>
+        <td class="rank-col"><span class="turn-num">${i + 1}</span></td>
+        <td class="player-name">${name}</td>
+        <td><span class="cell-box"><input type="number" inputmode="numeric" class="cell-input${val === 0 ? " cell-zero" : ""}" value="${val}" />${drawnTag}</span></td>
+        <td class="total-cell"><span class="score-badge">${running[pid]}</span></td>
+        <td class="rank-col"><button class="btn btn-danger btn-icon" data-delturn="${i}" title="Supprimer le tour"><i class="fa-regular fa-xmark"></i></button></td>
+      </tr>`);
+
+    const input = tr.querySelector("input");
+    input.addEventListener("input", () => {
+      input.classList.toggle("cell-zero", (Number(input.value) || 0) === 0);
+    });
+    input.addEventListener("change", (e) => {
+      const g = getGame(game.id);
+      const c = g.rounds[i].scores[pid] || { points: 0 };
+      const v = Number(e.target.value) || 0;
+      c.points = v;
+      if (v !== 0) delete c.drawn; // a real score overrides "a pioché"
+      g.rounds[i].scores[pid] = c;
+      upsertGame(g);
+      renderDetails(game.id);
+    });
+
+    tr.querySelector("[data-delturn]").addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: `Supprimer le tour ${i + 1} ?`,
+        body: `Le score de ${p ? p.name : "ce joueur"} pour ce tour sera supprimé.`,
+        confirmLabel: "Supprimer",
+        danger: true,
+      });
+      if (!ok) return;
+      const g = getGame(game.id);
+      g.rounds.splice(i, 1);
+      upsertGame(g);
+      renderDetails(game.id);
+    });
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
 }
 
 function buildTable(game, rankMap, w) {
+  const def = defFor(game);
+  const isFlip7Game = def.entry === "flip7";
   const hasRounds = game.rounds.length > 0;
   const winIds = new Set(winners(game).map((p) => p.id));
   const wrap = el(`<div class="table-wrap"></div>`);
@@ -1900,11 +2302,71 @@ function buildTable(game, rankMap, w) {
     game.rounds.forEach((r, ri) => {
       const cell = r.scores[p.id] || { points: 0, flip7: false, bust: false };
       const td = el(`<td></td>`);
-      const tags = `${cell.flip7 ? '<span class="flip7-tag">+15</span>' : ""}`;
-      // Eliminated cells stay editable but keep a "disabled" look while at 0.
-      const val = cell.bust ? 0 : Number(cell.points) || 0;
+      const pts = cell.bust ? 0 : Number(cell.points) || 0;
+      if (isFlip7Game) {
+        // At rest the input shows only the entered points (with a "+15" badge
+        // when Flip 7); focusing reveals the "10+15" expression so the bonus can
+        // be added or removed by typing — which toggles the badge live.
+        const flip7 = !cell.bust && !!cell.flip7;
+        td.innerHTML = `<span class="cell-box"><input type="text" inputmode="numeric" class="cell-input${pts === 0 && !flip7 ? " cell-zero" : ""}" value="${esc(String(pts))}" />${flip7 ? '<span class="flip7-tag">+15</span>' : ""}</span>`;
+        const input = td.querySelector("input");
+        const box = td.querySelector(".cell-box");
+        const setBadge = (on) => {
+          const tag = box.querySelector(".flip7-tag");
+          if (on && !tag)
+            box.insertAdjacentHTML("beforeend", '<span class="flip7-tag">+15</span>');
+          else if (!on && tag) tag.remove();
+        };
+        input.addEventListener("focus", () => {
+          if (box.querySelector(".flip7-tag"))
+            input.value = `${Number(input.value) || 0}+15`;
+        });
+        input.addEventListener("input", () => {
+          const { points, flip7: f } = parseFlip7Input(input.value);
+          setBadge(f);
+          input.classList.toggle("cell-zero", points === 0 && !f);
+        });
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") input.blur();
+        });
+        const restoreDisplay = () => {
+          input.value = String(pts);
+          setBadge(flip7);
+          input.classList.toggle("cell-zero", pts === 0 && !flip7);
+        };
+        input.addEventListener("blur", () => {
+          const { points, flip7: f } = parseFlip7Input(input.value);
+          const bustCleared = cell.bust && (points !== 0 || f);
+          // Nothing actually changed: just collapse back to the at-rest display
+          // (points only) without a full re-render.
+          if (points === pts && f === flip7 && !bustCleared) {
+            restoreDisplay();
+            return;
+          }
+          const g = getGame(game.id);
+          const beforeWinnerId = (winner(g) || {}).id || null;
+          const c = g.rounds[ri].scores[p.id] || {
+            points: 0,
+            flip7: false,
+            bust: false,
+          };
+          c.points = points;
+          c.flip7 = f;
+          if (bustCleared) c.bust = false; // a real score/bonus revives the cell
+          g.rounds[ri].scores[p.id] = c;
+          upsertGame(g);
+          renderDetails(game.id); // reset the cell to its at-rest display
+          celebrateIfNewWinner(beforeWinnerId, g);
+        });
+        tr.appendChild(td);
+        return;
+      }
+      // Number games (Skyjo, Time's Up!): a plain editable number. Games that
+      // allow negatives (Skyjo) keep the classic number keyboard (no inputmode)
+      // so the "−" key stays reachable; others use the numeric pad.
+      const imode = def.negatives ? "" : ' inputmode="numeric"';
       td.innerHTML = `
-        <span class="cell-box"><input type="number" class="cell-input${val === 0 ? " cell-zero" : ""}" value="${val}" />${tags}</span>`;
+        <span class="cell-box"><input type="number"${imode} class="cell-input${pts === 0 ? " cell-zero" : ""}" value="${pts}" /></span>`;
       const input = td.querySelector("input");
       input.addEventListener("input", () => {
         input.classList.toggle("cell-zero", (Number(input.value) || 0) === 0);
@@ -1912,15 +2374,8 @@ function buildTable(game, rankMap, w) {
       input.addEventListener("change", (e) => {
         const g = getGame(game.id);
         const beforeWinnerId = (winner(g) || {}).id || null;
-        const c = g.rounds[ri].scores[p.id] || {
-          points: 0,
-          flip7: false,
-          bust: false,
-        };
-        const v = Number(e.target.value) || 0;
-        c.points = v;
-        // A non-zero edit overrides the elimination so the score actually counts.
-        if (v !== 0) c.bust = false;
+        const c = g.rounds[ri].scores[p.id] || { points: 0 };
+        c.points = Number(e.target.value) || 0;
         g.rounds[ri].scores[p.id] = c;
         upsertGame(g);
         renderDetails(game.id);
@@ -1972,9 +2427,21 @@ function buildTable(game, rankMap, w) {
   return wrap;
 }
 
+// Parse a Flip 7 details-cell input: a trailing "+15" marks a Flip 7 bonus, so
+// "10+15" → { points: 10, flip7: true } and "10" → { points: 10, flip7: false }.
+function parseFlip7Input(value) {
+  const v = String(value).trim().replace(/\s+/g, "");
+  const m = v.match(/^(-?\d*)\+15$/);
+  if (m) return { points: Number(m[1]) || 0, flip7: true };
+  return { points: Number(v) || 0, flip7: false };
+}
 // Does a draft cell hold any entered data?
 function draftHasData(d) {
   return d && ((d.points !== "" && d.points != null) || d.flip7 || d.bust);
+}
+// Does a turn-based draft (Qwirkle) hold any entered data?
+function turnDraftHasData(d) {
+  return !!(d && ((d.points !== "" && d.points != null) || d.drawn));
 }
 // Convert a draft cell to a stored round cell, per the game's entry style.
 function draftToCell(def, d) {
@@ -1998,20 +2465,31 @@ function buildEntryRow(game, draft, p, onChange) {
       <div class="entry-player">
         <span class="pname">${esc(p.name)}</span>
         <div class="entry-controls">
-          <input type="number" class="cell-input" placeholder="0" value="${esc(d.points)}" />
+          ${def.negatives ? '<button type="button" class="btn btn-ghost btn-sm sign-btn" title="Score négatif" aria-label="Inverser le signe">±</button>' : ""}
+          <input type="number" inputmode="numeric" class="cell-input" placeholder="0" value="${esc(d.points)}" />
         </div>
       </div>`);
-    row.querySelector("input").addEventListener("input", (e) => {
+    const input = row.querySelector("input");
+    input.addEventListener("input", (e) => {
       draft[p.id].points = e.target.value;
       notify();
     });
+    const signBtn = row.querySelector(".sign-btn");
+    if (signBtn)
+      signBtn.addEventListener("click", () => {
+        const v = String(input.value).trim();
+        input.value = v.startsWith("-") ? v.slice(1) : "-" + v;
+        draft[p.id].points = input.value;
+        input.focus();
+        notify();
+      });
     return row;
   }
   const row = el(`
     <div class="entry-player ${d.bust ? "busted" : d.flip7 ? "flipped" : ""}">
       <span class="pname">${esc(p.name)}</span>
       <div class="entry-controls">
-        <input type="number" class="cell-input" placeholder="0" min="0" value="${d.bust ? "" : esc(d.points)}" ${d.bust ? "disabled" : ""} />
+        <input type="number" inputmode="numeric" class="cell-input" placeholder="0" min="0" value="${d.bust ? "" : esc(d.points)}" ${d.bust ? "disabled" : ""} />
         <button type="button" class="btn btn-ghost btn-sm flip7-btn ${d.flip7 ? "active" : ""}" ${d.bust ? "disabled" : ""}><i class="fa-regular fa-star"></i> Flip 7 (+${def.bonus})</button>
         <button type="button" class="btn btn-ghost btn-sm bust-btn ${d.bust ? "active" : ""}">Éliminé</button>
       </div>
@@ -2173,6 +2651,601 @@ function openScoresDialog(game) {
   root.appendChild(overlay);
 }
 
+/* ---------- Turn-based entry (Qwirkle) ---------- */
+// Action bar for a turn-based game: "Qui commence ?" until a starter is set,
+// then "Score de <current player>", plus a "Terminer" button once scoring has
+// begun.
+function buildTurnBar(game) {
+  const started = !!game.starter;
+  const cur = currentPlayer(game);
+  const canEnd = game.rounds.length > 0;
+  const hasDraft = turnDraftHasData(game.draftTurn);
+  const scoreBtnHtml =
+    started && cur
+      ? `<button class="btn btn-primary btn-big" id="turnScore"><i class="fa-regular fa-${hasDraft ? "pen-to-square" : "plus"}"></i> ${hasDraft ? `Reprendre — ${esc(cur.name)}` : `Score de ${esc(cur.name)}`}</button>`
+      : `<button class="btn btn-primary btn-big" id="startGame"><i class="fa-regular fa-flag"></i> Qui commence ?</button>`;
+  const bar = el(`
+    <div class="new-scores-bar turn-bar">
+      ${scoreBtnHtml}
+      ${canEnd ? `<button class="btn btn-ghost btn-big btn-end" id="endGameBar"><i class="fa-regular fa-flag-checkered"></i> Terminer</button>` : ""}
+    </div>`);
+  const startBtn = bar.querySelector("#startGame");
+  if (startBtn)
+    startBtn.addEventListener("click", () => openStarterDialog(game));
+  const scoreBtn = bar.querySelector("#turnScore");
+  if (scoreBtn) scoreBtn.addEventListener("click", () => openTurnDialog(game));
+  const endBtn = bar.querySelector("#endGameBar");
+  if (endBtn) endBtn.addEventListener("click", () => endGamePrompt(game));
+  return bar;
+}
+
+// Pick which player starts; the turn order then follows the roster from there.
+function openStarterDialog(game) {
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>Qui commence ?</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body">
+      <p class="rules-intro">Choisissez le joueur qui débute. Les tours s'enchaîneront ensuite dans l'ordre des joueurs.</p>
+      <div class="starter-list" id="starterList"></div>
+    </div>`;
+  const list = modal.querySelector("#starterList");
+  game.players.forEach((p) => {
+    const btn = el(
+      `<button class="btn btn-ghost starter-item">${esc(p.name)}</button>`,
+    );
+    btn.addEventListener("click", () => {
+      const g = getGame(game.id);
+      g.starter = p.id;
+      upsertGame(g);
+      overlay.remove();
+      go("game", { id: game.id });
+    });
+    list.appendChild(btn);
+  });
+  modal
+    .querySelector("[data-act=close]")
+    .addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  root.appendChild(overlay);
+}
+
+// Enter the current player's score for this turn. "A pioché" records 0 points
+// (the player drew/exchanged tiles instead of scoring) — same idea as Flip 7's
+// "Éliminé" toggle. Saving commits a one-player round and advances the turn.
+function openTurnDialog(game) {
+  const cur = currentPlayer(game);
+  if (!cur) return;
+  const turnNo = game.rounds.length + 1;
+  const saved = game.draftTurn || {};
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
+  let drawn = !!saved.drawn;
+  const savedPoints = drawn || saved.points == null ? "" : String(saved.points);
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>Score de ${esc(cur.name)}</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body">
+      <div class="turn-meta">Tour ${turnNo}</div>
+      <div class="entry-player turn-entry${drawn ? " busted" : ""}" id="turnEntry">
+        <div class="entry-controls">
+          <input type="number" class="cell-input" id="turnPoints" placeholder="0" inputmode="numeric" value="${esc(savedPoints)}" ${drawn ? "disabled" : ""} />
+          <button type="button" class="btn btn-ghost btn-sm bust-btn${drawn ? " active" : ""}" id="drawnBtn">A pioché (0)</button>
+        </div>
+      </div>
+    </div>
+    <div class="scores-dialog-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-act="close">Annuler</button>
+      <button class="btn btn-primary" id="saveTurn">Enregistrer</button>
+    </div>`;
+  const input = modal.querySelector("#turnPoints");
+  const drawnBtn = modal.querySelector("#drawnBtn");
+  const entry = modal.querySelector("#turnEntry");
+
+  // Pre-save the in-progress turn to game.draftTurn (debounced), so closing and
+  // reopening keeps the entry — mirrors the multi-player scores dialog.
+  const hasData = () => drawn || (input.value !== "" && input.value != null);
+  const writeDraft = () => {
+    const g = getGame(game.id);
+    g.draftTurn = hasData() ? { points: drawn ? "" : input.value, drawn } : null;
+    upsertGame(g);
+  };
+  let saveTimer = null;
+  const saveDraftSoon = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(writeDraft, 400);
+  };
+
+  drawnBtn.addEventListener("click", () => {
+    drawn = !drawn;
+    drawnBtn.classList.toggle("active", drawn);
+    entry.classList.toggle("busted", drawn);
+    input.disabled = drawn;
+    if (drawn) input.value = "";
+    else input.focus();
+    saveDraftSoon();
+  });
+  input.addEventListener("input", saveDraftSoon);
+
+  // Leaving the dialog flushes the pending pre-save so the turn can be resumed.
+  const closeKeepingDraft = () => {
+    clearTimeout(saveTimer);
+    writeDraft();
+    overlay.remove();
+    if (route.name === "game" && route.id === game.id)
+      go("game", { id: game.id });
+  };
+  modal
+    .querySelectorAll("[data-act=close]")
+    .forEach((b) => b.addEventListener("click", closeKeepingDraft));
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeKeepingDraft();
+  });
+
+  const save = () => {
+    clearTimeout(saveTimer); // cancel any pending draft write
+    const points = drawn ? 0 : Number(input.value) || 0;
+    const cell = drawn ? { points: 0, drawn: true } : { points };
+    const g = getGame(game.id);
+    g.rounds.push({ scores: { [cur.id]: cell }, at: Date.now() });
+    g.draftTurn = null; // turn committed — clear the draft
+    upsertGame(g);
+    overlay.remove();
+    toast(`${cur.name} : ${drawn ? "a pioché (0)" : points + " pts"}`);
+    go("game", { id: game.id });
+  };
+  modal.querySelector("#saveTurn").addEventListener("click", save);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") save();
+  });
+  root.appendChild(overlay);
+  if (!drawn) input.focus();
+}
+
+/* ---------- Contrée (teams + bids) ---------- */
+// Compact team scoreboard: the two teams ranked by total, leader crowned.
+function buildContreeSummary(game) {
+  const st = standings(game); // the two teams, sorted by total (desc)
+  const winIds = new Set(winners(game).map((t) => t.id));
+  const hasRounds = game.rounds.length > 0;
+  const labels = rankLabels(st, (a, b) => a.total === b.total);
+  const wrap = el(`<div class="table-wrap"></div>`);
+  const table = el(
+    `<table class="score summary-table"><thead><tr><th class="rank-col">#</th><th class="player-name">Équipe</th><th>Total</th></tr></thead></table>`,
+  );
+  const tbody = el(`<tbody></tbody>`);
+  st.forEach((t, i) => {
+    const { place, label } = labels[i];
+    const won = winIds.has(t.id);
+    const crown = won
+      ? '<span class="crown"><i class="fa-regular fa-crown"></i></span>'
+      : "";
+    const rankBadge = hasRounds ? `<span class="badge rank${place}">${label}</span>` : "";
+    tbody.appendChild(
+      el(`
+      <tr class="${won ? "winner-row" : ""}">
+        <td class="rank-col">${rankBadge}</td>
+        <td class="player-name">${esc(t.name)}</td>
+        <td class="total-cell"><span class="score-badge rank${place}">${t.total}${crown}</span></td>
+      </tr>`),
+    );
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+// Inline HTML describing a bid: contract value, trump suit icon, taking team,
+// and a Contré/Surcontré tag when applicable.
+function contreeBidHTML(bid, game) {
+  const suit = contreeSuit(bid.suit);
+  const team = teamsOf(game).find((t) => t.id === bid.team);
+  const suitHTML = suit
+    ? `<span class="suit${suit.red ? " red" : ""}">${suit.sym}</span>`
+    : "";
+  const coinche =
+    bid.coinche === "surcoinche"
+      ? '<span class="bid-coinche">Surcontré</span>'
+      : bid.coinche === "coinche"
+        ? '<span class="bid-coinche">Contré</span>'
+        : "";
+  const contractTxt = bid.contract === "capot" ? "Capot" : esc(String(bid.contract));
+  return `<span class="bid-contract">${contractTxt}</span> ${suitHTML} · <b>${esc(team ? team.name : "")}</b> ${coinche}`;
+}
+
+// White card above the scoreboard: the dealer on the left and, once a bid has
+// been entered, the bid info opposed on the right.
+function buildBidInfo(game) {
+  const dealer = currentDealer(game);
+  const bid = game.pendingBid
+    ? `<span class="bid-current">${contreeBidHTML(game.pendingBid, game)}</span>`
+    : "";
+  return el(`
+    <div class="bid-info">
+      <span class="bid-dealer"><i class="fa-regular fa-share-from-square"></i> Distribue : <b>${esc(dealer ? dealer.name : "")}</b></span>
+      ${bid}
+    </div>`);
+}
+
+// Action area for a Contrée game: pick the first dealer, then the
+// dealer→bid→scores cycle. Shows the current deal's dealer.
+function buildContreeBar(game) {
+  const wrap = el(`<div class="contree-actions"></div>`);
+  if (!game.dealer) {
+    const bar = el(
+      `<div class="new-scores-bar turn-bar"><button class="btn btn-primary btn-big" id="setDealer"><i class="fa-regular fa-flag"></i> Qui distribue ?</button></div>`,
+    );
+    bar.querySelector("#setDealer").addEventListener("click", () => openDealerDialog(game));
+    wrap.appendChild(bar);
+    return wrap;
+  }
+  if (game.pendingBid) {
+    // dealer is shown in the bid card above — just the action buttons here
+    const bar = el(`
+      <div class="new-scores-bar turn-bar">
+        <button class="btn btn-primary btn-big" id="enterScores"><i class="fa-regular fa-plus"></i> Saisir les scores</button>
+        <button class="btn btn-ghost btn-big btn-end" id="editBid"><i class="fa-regular fa-pen"></i> Mise</button>
+      </div>`);
+    bar.querySelector("#enterScores").addEventListener("click", () => openContreeScoreDialog(game));
+    bar.querySelector("#editBid").addEventListener("click", () => openBidDialog(game));
+    wrap.appendChild(bar);
+  } else {
+    // dealer is shown in the card above — just the "saisir la mise" button here
+    const bar = el(
+      `<div class="new-scores-bar turn-bar"><button class="btn btn-primary btn-big" id="setBid"><i class="fa-regular fa-gavel"></i> Saisir la mise</button></div>`,
+    );
+    bar.querySelector("#setBid").addEventListener("click", () => openBidDialog(game));
+    wrap.appendChild(bar);
+  }
+  return wrap;
+}
+
+// Pick who deals first; the deal then rotates in roster order.
+function openDealerDialog(game) {
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>Qui distribue ?</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body">
+      <p class="rules-intro">Choisissez le premier distributeur. La distribution tournera ensuite dans l'ordre des joueurs.</p>
+      <div class="starter-list" id="dealerList"></div>
+    </div>`;
+  const list = modal.querySelector("#dealerList");
+  game.players.forEach((p) => {
+    const btn = el(`<button class="btn btn-ghost starter-item">${esc(p.name)}</button>`);
+    btn.addEventListener("click", () => {
+      const g = getGame(game.id);
+      g.dealer = p.id;
+      upsertGame(g);
+      overlay.remove();
+      go("game", { id: game.id });
+    });
+    list.appendChild(btn);
+  });
+  modal.querySelector("[data-act=close]").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  root.appendChild(overlay);
+}
+
+// Enter (or edit) the current deal's bid: contract value, trump suit, taking
+// team, and Contré/Surcontré. Stored on game.pendingBid until scores are saved.
+function openBidDialog(game) {
+  const saved = game.pendingBid || {};
+  let contract = saved.contract || null;
+  let suit = saved.suit || null;
+  let team = saved.team || null;
+  let coinche = saved.coinche || "none";
+  const CONTRACTS = [80, 90, 100, 110, 120, 130, 140, 150, 160, "capot"];
+  const contractLabel = (v) => (v === "capot" ? "Capot" : v);
+  const teams = teamsOf(game);
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>${saved.contract ? "Modifier la mise" : "Saisir la mise"}</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body">
+      <div class="field">
+        <label>Contrat</label>
+        <div class="pick-row contract-picker" id="contractPicker">
+          ${CONTRACTS.map((v) => `<button type="button" class="pick-btn${contract === v ? " active" : ""}${v === "capot" ? " capot" : ""}" data-contract="${v}">${contractLabel(v)}</button>`).join("")}
+        </div>
+      </div>
+      <div class="field">
+        <label>Atout</label>
+        <div class="suit-picker" id="suitPicker">
+          ${CONTREE_SUITS.map(
+            (s) =>
+              `<button type="button" class="suit-btn${s.red ? " red" : ""}${suit === s.key ? " active" : ""}" data-suit="${s.key}"><span class="suit-sym">${s.sym}</span> ${s.label}</button>`,
+          ).join("")}
+        </div>
+      </div>
+      <div class="field">
+        <label>Équipe qui prend</label>
+        <div class="pick-row" id="teamPicker">
+          ${teams.map((t) => `<button type="button" class="pick-btn${team === t.id ? " active" : ""}" data-team="${t.id}">${esc(t.name)}</button>`).join("")}
+        </div>
+      </div>
+      <div class="field">
+        <label>Contre</label>
+        <div class="pick-row" id="coinchePicker">
+          <button type="button" class="pick-btn${coinche === "none" ? " active" : ""}" data-coinche="none">Aucune</button>
+          <button type="button" class="pick-btn${coinche === "coinche" ? " active" : ""}" data-coinche="coinche">Contré</button>
+          <button type="button" class="pick-btn${coinche === "surcoinche" ? " active" : ""}" data-coinche="surcoinche">Surcontré</button>
+        </div>
+      </div>
+    </div>
+    <div class="scores-dialog-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-act="close">Annuler</button>
+      <button class="btn btn-primary" id="saveBid">Valider la mise</button>
+    </div>`;
+  const sync = (sel, attr, val) =>
+    modal
+      .querySelectorAll(sel + " button")
+      .forEach((b) => b.classList.toggle("active", b.dataset[attr] === val));
+  modal.querySelectorAll("#contractPicker button").forEach((b) =>
+    b.addEventListener("click", () => {
+      const v = b.dataset.contract;
+      contract = v === "capot" ? "capot" : Number(v);
+      sync("#contractPicker", "contract", String(contract));
+    }),
+  );
+  modal.querySelectorAll("#suitPicker button").forEach((b) =>
+    b.addEventListener("click", () => {
+      suit = b.dataset.suit;
+      sync("#suitPicker", "suit", suit);
+    }),
+  );
+  modal.querySelectorAll("#teamPicker button").forEach((b) =>
+    b.addEventListener("click", () => {
+      team = b.dataset.team;
+      sync("#teamPicker", "team", team);
+    }),
+  );
+  modal.querySelectorAll("#coinchePicker button").forEach((b) =>
+    b.addEventListener("click", () => {
+      coinche = b.dataset.coinche;
+      sync("#coinchePicker", "coinche", coinche);
+    }),
+  );
+  const close = () => overlay.remove();
+  modal.querySelectorAll("[data-act=close]").forEach((b) => b.addEventListener("click", close));
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  modal.querySelector("#saveBid").addEventListener("click", () => {
+    if (!contract) return toast("Choisissez la valeur du contrat");
+    if (!suit) return toast("Choisissez l'atout");
+    if (!team) return toast("Choisissez l'équipe qui prend");
+    const g = getGame(game.id);
+    g.pendingBid = { contract, suit, team, coinche };
+    upsertGame(g);
+    close();
+    go("game", { id: game.id });
+  });
+  root.appendChild(overlay);
+}
+
+// Enter the two teams' scores for the current deal. The two trick scores are
+// linked (they sum to 162); each team has a "Belote (+20)" toggle, and a live
+// message flags whether the taking team made its contract. Commits a deal (bid
+// + final scores), clears the pending bid, and advances the dealer.
+function openContreeScoreDialog(game) {
+  const teams = teamsOf(game);
+  const bid = game.pendingBid;
+  const TOTAL = 160; // trick points shared per deal (rounded base)
+  const state = {};
+  teams.forEach((t) => (state[t.id] = { belote: false }));
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>Score de la donne</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body">
+      ${bid ? `<div class="deal-bid">${contreeBidHTML(bid, game)}</div>` : ""}
+      <div class="entry-grid">
+        ${teams
+          .map(
+            (t) => `
+          <div class="entry-player">
+            <span class="pname">${esc(t.name)}</span>
+            <div class="entry-controls">
+              <input type="number" inputmode="numeric" class="cell-input" data-score="${t.id}" placeholder="0" />
+              <button type="button" class="btn btn-ghost btn-sm belote-btn" data-belote="${t.id}">Belote (+20)</button>
+            </div>
+          </div>`,
+          )
+          .join("")}
+      </div>
+      <div class="contract-msg" id="contractMsg" hidden></div>
+    </div>
+    <div class="scores-dialog-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-act="close">Annuler</button>
+      <button class="btn btn-primary" id="saveDeal">Enregistrer la donne</button>
+    </div>`;
+  const inputs = {};
+  teams.forEach((t) => (inputs[t.id] = modal.querySelector(`[data-score="${t.id}"]`)));
+  const otherId = (id) => teams.find((t) => t.id !== id).id;
+  const round10 = (n) =>
+    Math.min(TOTAL, Math.max(0, Math.round((Number(n) || 0) / 10) * 10));
+  const beloteOf = (id) => (state[id].belote ? 20 : 0);
+  // Compute each team's deal score from the bid, the taker's (rounded) trick
+  // points, the coinche and each team's belote.
+  const compute = () => {
+    if (!bid) return null;
+    const takerId = bid.team;
+    const defId = otherId(takerId);
+    const tricks = round10(inputs[takerId].value); // taker's trick points
+    const m =
+      bid.coinche === "surcoinche" ? 4 : bid.coinche === "coinche" ? 2 : 1;
+    let baseTaker = 0;
+    let baseDef = 0;
+    let success;
+    if (bid.contract === "capot") {
+      success = tricks >= TOTAL; // all tricks taken
+      baseTaker = success ? 500 : 0;
+      baseDef = success ? 0 : 500;
+    } else {
+      const c = Number(bid.contract) || 0;
+      success = tricks + beloteOf(takerId) >= c; // belote counts toward contract
+      if (bid.coinche !== "none") {
+        const pot = (TOTAL + c) * m;
+        baseTaker = success ? pot : 0;
+        baseDef = success ? 0 : pot;
+      } else if (tricks >= TOTAL) {
+        baseTaker = 250 + c; // capot non annoncé
+        success = true;
+      } else if (success) {
+        baseTaker = tricks + c;
+        baseDef = TOTAL - tricks;
+      } else {
+        baseDef = TOTAL + c;
+      }
+    }
+    // Belote always adds 20 to its team (kept even on a chute).
+    return {
+      success,
+      scores: {
+        [takerId]: baseTaker + beloteOf(takerId),
+        [defId]: baseDef + beloteOf(defId),
+      },
+    };
+  };
+  const msg = modal.querySelector("#contractMsg");
+  const refreshMsg = () => {
+    const anyFilled = teams.some((t) => inputs[t.id].value !== "");
+    const res = compute();
+    if (!res || !anyFilled) return (msg.hidden = true);
+    const taker = teams.find((t) => t.id === bid.team);
+    const detail = teams
+      .map((t) => `${esc(t.name)} <b>${res.scores[t.id]}</b>`)
+      .join(" · ");
+    msg.hidden = false;
+    msg.classList.toggle("fail", !res.success);
+    msg.innerHTML = `${esc(taker.name)} ${res.success ? "réalise son contrat" : "chute"} — ${detail}`;
+  };
+  // The two trick scores are complementary (sum to 160).
+  teams.forEach((t) => {
+    inputs[t.id].addEventListener("input", () => {
+      const raw = inputs[t.id].value;
+      inputs[otherId(t.id)].value = raw === "" ? "" : TOTAL - (Number(raw) || 0);
+      refreshMsg();
+    });
+    // Snap to a multiple of 10 on blur.
+    inputs[t.id].addEventListener("blur", () => {
+      if (inputs[t.id].value === "") return;
+      const r = round10(inputs[t.id].value);
+      inputs[t.id].value = r;
+      inputs[otherId(t.id)].value = TOTAL - r;
+      refreshMsg();
+    });
+  });
+  modal.querySelectorAll("[data-belote]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const id = b.dataset.belote;
+      state[id].belote = !state[id].belote;
+      b.classList.toggle("active", state[id].belote);
+      refreshMsg();
+    }),
+  );
+  const close = () => overlay.remove();
+  modal.querySelectorAll("[data-act=close]").forEach((b) => b.addEventListener("click", close));
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  modal.querySelector("#saveDeal").addEventListener("click", () => {
+    const res = compute();
+    const scores = res ? res.scores : {};
+    teams.forEach((t) => {
+      if (scores[t.id] == null) scores[t.id] = round10(inputs[t.id].value);
+    });
+    const g = getGame(game.id);
+    const beforeWinnerId = (winner(g) || {}).id || null;
+    g.rounds.push({ bid: g.pendingBid || null, scores, at: Date.now() });
+    g.pendingBid = null; // deal committed — dealer advances automatically
+    upsertGame(g);
+    close();
+    toast(`Donne ${g.rounds.length} enregistrée`);
+    go("game", { id: game.id });
+    celebrateIfNewWinner(beforeWinnerId, g);
+  });
+  root.appendChild(overlay);
+  inputs[bid ? bid.team : teams[0].id].focus();
+}
+
+// Details for a Contrée game: one row per deal (bid + each team's points).
+function buildContreeTable(game) {
+  const teams = teamsOf(game);
+  const running = { A: 0, B: 0 };
+  const wrap = el(`<div class="table-wrap"></div>`);
+  const table = el(`<table class="score turn-table"></table>`);
+  table.innerHTML = `<thead><tr><th class="rank-col">Donne</th><th class="player-name">Mise</th><th>${esc(teams[0].name)}</th><th>${esc(teams[1].name)}</th><th class="rank-col"></th></tr></thead>`;
+  const tbody = el(`<tbody></tbody>`);
+  if (!game.rounds.length) {
+    tbody.appendChild(
+      el(`<tr><td colspan="5" class="turn-empty muted">Aucune donne jouée pour l'instant.</td></tr>`),
+    );
+  }
+  game.rounds.forEach((r, i) => {
+    running.A += Number(r.scores && r.scores.A) || 0;
+    running.B += Number(r.scores && r.scores.B) || 0;
+    const bidCell = r.bid ? contreeBidHTML(r.bid, game) : '<span class="muted">—</span>';
+    const tr = el(`
+      <tr>
+        <td class="rank-col"><span class="turn-num">${i + 1}</span></td>
+        <td class="player-name">${bidCell}</td>
+        <td class="total-cell">${Number(r.scores && r.scores.A) || 0}<span class="run-total">${running.A}</span></td>
+        <td class="total-cell">${Number(r.scores && r.scores.B) || 0}<span class="run-total">${running.B}</span></td>
+        <td class="rank-col"><button class="btn btn-danger btn-icon" data-deldeal="${i}" title="Supprimer la donne"><i class="fa-regular fa-xmark"></i></button></td>
+      </tr>`);
+    tr.querySelector("[data-deldeal]").addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: `Supprimer la donne ${i + 1} ?`,
+        body: "Les scores de cette donne seront supprimés.",
+        confirmLabel: "Supprimer",
+        danger: true,
+      });
+      if (!ok) return;
+      const g = getGame(game.id);
+      g.rounds.splice(i, 1);
+      upsertGame(g);
+      renderDetails(game.id);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
 /* ---------- Edit Players ---------- */
 // Edit a game's roster and type in a dialog.
 function openEditPlayersDialog(game) {
@@ -2197,10 +3270,15 @@ function openEditPlayersDialog(game) {
         <label>Type de partie</label>
         <div class="mode-tabs" id="modeTabs">${modeTabsHTML()}</div>
       </div>
+      <div class="field" id="targetField" hidden>
+        <label for="targetInput">Score cible</label>
+        <input type="number" inputmode="numeric" class="cell-input target-input" id="targetInput" value="${esc(game.target != null ? String(game.target) : "")}" />
+      </div>
       <div class="field">
         <label id="playersLabel">Joueurs</label>
         <div class="player-rows" id="rows"></div>
         ${locked ? "" : `<button class="btn btn-ghost btn-sm" id="addPlayer">+ Ajouter un joueur</button>`}
+        <p class="teams-hint" id="teamsHint" hidden></p>
       </div>
     </div>
     <div class="scores-dialog-foot">
@@ -2222,26 +3300,64 @@ function openEditPlayersDialog(game) {
       .forEach((i) => (i.placeholder = u.placeholder));
   };
 
+  // Conversions that would change the round structure are locked once scores
+  // exist: turn-based (Qwirkle) and team (Contrée) games store rounds
+  // differently, so a started game can't switch to/from them.
+  const hasRounds = game.rounds.length > 0;
+  const curTurn = !!defFor(game).turnBased;
+  const curTeams = !!defFor(game).teams;
+  const isTeams = () => rulesetOf(mode).teams;
   const modeTabs = modal.querySelector("#modeTabs");
+  const tabBtns = modeTabs.querySelectorAll(".mode-tab");
+  tabBtns.forEach((b) => {
+    const r = rulesetOf(b.dataset.mode);
+    if (hasRounds && (!!r.turnBased !== curTurn || !!r.teams !== curTeams)) {
+      b.disabled = true;
+      b.classList.add("disabled");
+      b.title = "Partie déjà commencée — type de jeu non modifiable";
+    }
+  });
+  const targetField = modal.querySelector("#targetField");
+  const targetInput = modal.querySelector("#targetInput");
+  const teamsHint = modal.querySelector("#teamsHint");
+  // Contrée: A = seats 1 & 3, B = seats 2 & 4. Live preview under the roster.
+  const updateTeamsHint = () => {
+    if (!isTeams()) return (teamsHint.hidden = true);
+    teamsHint.hidden = false;
+    const nm = (i) => (players[i] && players[i].name.trim()) || `Joueur ${i + 1}`;
+    teamsHint.innerHTML = `<b>Équipe A</b> : ${esc(nm(0))} & ${esc(nm(2))} · <b>Équipe B</b> : ${esc(nm(1))} & ${esc(nm(3))}`;
+  };
+  // Team games keep a fixed roster (no add/remove); games with a configurable
+  // target (Contrée) expose the score-target field.
+  const applyRoster = () => {
+    if (addBtn) addBtn.style.display = isTeams() ? "none" : "";
+    targetField.hidden = !rulesetOf(mode).configurableTarget;
+    updateTeamsHint();
+  };
   const syncModeTabs = () =>
-    modeTabs
-      .querySelectorAll(".mode-tab")
-      .forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-  modeTabs.querySelectorAll(".mode-tab").forEach((b) =>
+    tabBtns.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  tabBtns.forEach((b) =>
     b.addEventListener("click", () => {
+      if (b.disabled) return;
       mode = b.dataset.mode;
       syncModeTabs();
       applyUnit();
+      applyRoster();
+      drawRows();
     }),
   );
   syncModeTabs();
 
   const drawRows = renderPlayerRows(rowsEl, players, {
-    allowRemove: !locked,
+    allowRemove: () => !locked && !isTeams(),
     placeholder: () => unitOf(mode).placeholder,
     suggestions: () => placePlayerNames(getSelectedPlace(), unitKeyOf(mode)),
   });
   applyUnit();
+  applyRoster();
+  // Keep the teams preview in sync with name edits and reordering.
+  rowsEl.addEventListener("input", updateTeamsHint);
+  rowsEl.addEventListener("pointerup", () => setTimeout(updateTeamsHint, 0));
   if (addBtn) {
     addBtn.addEventListener("click", () => {
       players.push({ id: uid(), name: "" });
@@ -2260,13 +3376,33 @@ function openEditPlayersDialog(game) {
 
   modal.querySelector("#save").addEventListener("click", () => {
     const valid = players.filter((p) => p.name.trim());
-    if (valid.length < 2) return toast("Au moins 2 joueurs requis");
+    const def = rulesetOf(mode);
+    if (def.teams) {
+      if (valid.length !== 4)
+        return toast("La Contrée se joue à exactement 4 joueurs");
+    } else if (valid.length < 2) {
+      return toast("Au moins 2 joueurs requis");
+    }
     const dup = firstDuplicateName(valid.map((p) => p.name));
     if (dup) return toast(`« ${dup} » est présent en double`);
     const g = getGame(id);
     g.players = valid.map((p) => ({ id: p.id, name: p.name.trim() }));
-    g.mode = mode;
-    g.target = rulesetOf(mode).target; // follow the (possibly new) ruleset
+    // Never switch a started game to/from a turn-based or team type.
+    const cur = defFor(g);
+    const incompatible =
+      g.rounds.length > 0 &&
+      (!!def.turnBased !== !!cur.turnBased || !!def.teams !== !!cur.teams);
+    const safeMode = incompatible ? g.mode : mode;
+    g.mode = safeMode;
+    const sdef = rulesetOf(safeMode);
+    // Configurable target (Contrée): read the field; else follow the ruleset.
+    if (sdef.configurableTarget) {
+      const t = Number(targetInput.value) || 0;
+      if (t <= 0) return toast("Indiquez un score cible valide");
+      g.target = t;
+    } else {
+      g.target = sdef.target;
+    }
     upsertGame(g);
     overlay.remove();
     go("game", { id });
@@ -2280,6 +3416,7 @@ function renderEntry(id) {
   const game = getGame(id);
   if (!game) return go("home");
   if (winner(game)) return go("game", { id }); // game is over — no new scores
+  if (defFor(game).turnBased || defFor(game).teams) return go("game", { id }); // scored via dialog
   app.innerHTML = "";
 
   const backRow = el(`
@@ -2316,6 +3453,8 @@ const STAT_FILTERS = {
   vengeance: { match: (g) => g.mode === "vengeance", order: "desc" },
   skyjo: { match: (g) => g.mode === "skyjo", order: "asc" },
   timesup: { match: (g) => g.mode === "timesup", order: "desc" },
+  qwirkle: { match: (g) => g.mode === "qwirkle", order: "desc" },
+  contree: { match: (g) => g.mode === "contree", order: "desc" },
 };
 function computeStats(place, filter = "flip7") {
   const f = STAT_FILTERS[filter] || STAT_FILTERS.flip7;
@@ -2323,7 +3462,10 @@ function computeStats(place, filter = "flip7") {
   const map = {}; // key: lowercased trimmed name -> aggregate
   games.forEach((g) => {
     const def = defFor(g);
-    g.players.forEach((p) => {
+    // Team games (Contrée): a player's figures are those of their team
+    // (seats 1 & 3 → team A, 2 & 4 → team B).
+    const teamOfSeat = (idx) => (idx % 2 === 0 ? "A" : "B");
+    g.players.forEach((p, idx) => {
       const name = p.name.trim();
       if (!name) return;
       const key = name.toLowerCase();
@@ -2339,21 +3481,41 @@ function computeStats(place, filter = "flip7") {
         };
       const agg = map[key];
       agg.games += 1;
-      const total = playerTotal(g, p.id);
-      agg.points += total;
-      if (total > agg.bestGame) agg.bestGame = total;
-      g.rounds.forEach((r) => {
-        const cell = r.scores[p.id];
-        if (cell && cell.bust) agg.elims += 1;
-        const rv = def.cellValue(cell);
-        if (rv > agg.bestRound) agg.bestRound = rv;
-      });
+      if (def.teams) {
+        const teamId = teamOfSeat(idx);
+        const total = teamTotal(g, teamId);
+        agg.points += total;
+        if (total > agg.bestGame) agg.bestGame = total;
+        g.rounds.forEach((r) => {
+          const rv = Number(r.scores && r.scores[teamId]) || 0;
+          if (rv > agg.bestRound) agg.bestRound = rv;
+        });
+      } else {
+        const total = playerTotal(g, p.id);
+        agg.points += total;
+        if (total > agg.bestGame) agg.bestGame = total;
+        g.rounds.forEach((r) => {
+          const cell = r.scores[p.id];
+          if (cell && cell.bust) agg.elims += 1;
+          const rv = def.cellValue(cell);
+          if (rv > agg.bestRound) agg.bestRound = rv;
+        });
+      }
     });
     // Ties count as a win for every co-winner, not just one representative.
-    winners(g).forEach((w) => {
-      const key = w.name.trim().toLowerCase();
-      if (map[key]) map[key].wins += 1;
-    });
+    if (def.teams) {
+      const winTeams = new Set(winners(g).map((t) => t.id));
+      g.players.forEach((p, idx) => {
+        if (!winTeams.has(teamOfSeat(idx))) return;
+        const key = p.name.trim().toLowerCase();
+        if (map[key]) map[key].wins += 1;
+      });
+    } else {
+      winners(g).forEach((w) => {
+        const key = w.name.trim().toLowerCase();
+        if (map[key]) map[key].wins += 1;
+      });
+    }
   });
   const ptsCmp =
     f.order === "asc"
@@ -2423,8 +3585,10 @@ function renderStats() {
     { key: "flip7", label: "Flip 7 + Vengeance" },
     { key: "classic", label: "Flip 7" },
     { key: "vengeance", label: "Flip 7 Vengeance" },
+    { key: "qwirkle", label: "Qwirkle" },
     { key: "skyjo", label: "Skyjo" },
     { key: "timesup", label: "Time's Up!" },
+    { key: "contree", label: "Contrée" },
   ];
   let statMode = "flip7";
   let statMetric = "ranking";
