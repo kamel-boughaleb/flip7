@@ -182,8 +182,14 @@ function makeClient() {
 }
 const db = makeClient();
 
-/* ---------- storage: in-memory cache, write-through to Supabase ---------- */
+/* ---------- storage: in-memory cache, write-through to Supabase ----------
+   In Supabase mode the cache holds only the *current place*'s games (fetched
+   server-side filtered); the distinct places are loaded separately so the place
+   picker still knows them all. In local mode everything stays in the cache
+   (no transfer cost) and gamesForPlace() filters for display. */
 let GAMES = [];
+let LOADED_PLACE; // place the cache currently holds (undefined = not loaded yet)
+let PLACES = { names: [], hasNoPlace: false }; // distinct places known to the app
 
 function localLoad() {
   try {
@@ -198,13 +204,54 @@ function localSave() {
   } catch {}
 }
 
-// Load all games from the server (or localStorage) into the cache.
-async function fetchGames() {
+const samePlace = (a, b) =>
+  (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
+
+// Build the distinct-places set from a list of place names (may hold null/"").
+function placesFromNames(list) {
+  const map = new Map();
+  let hasNoPlace = false;
+  list.forEach((n) => {
+    const t = (n || "").trim();
+    if (t) map.set(t.toLowerCase(), t);
+    else hasNoPlace = true;
+  });
+  return { names: [...map.values()], hasNoPlace };
+}
+
+// Load the distinct places. Lightweight: only the place field, not the games.
+async function fetchPlaces() {
   if (!db) {
-    GAMES = localLoad();
+    PLACES = placesFromNames(localLoad().map((g) => g.place));
     return;
   }
-  const { data, error } = await db.from("games").select("id, data");
+  const { data, error } = await db.from("games").select("place:data->>place");
+  if (error) {
+    console.error(error);
+    return;
+  }
+  PLACES = placesFromNames((data || []).map((r) => r.place));
+}
+
+// Load the current place's games into the cache (server-side filtered).
+async function fetchGames(place) {
+  if (place === undefined) place = getSelectedPlace();
+  LOADED_PLACE = place;
+  if (!db) {
+    GAMES = localLoad(); // local: keep everything; gamesForPlace filters for display
+    return;
+  }
+  if (place == null) {
+    GAMES = []; // no place chosen yet — nothing to show
+    return;
+  }
+  let q = db.from("games").select("id, data");
+  // "Sans lieu" matches both a null and an empty place; else exact match.
+  q =
+    place === ""
+      ? q.or("data->>place.is.null,data->>place.eq.")
+      : q.eq("data->>place", place);
+  const { data, error } = await q;
   if (error) {
     console.error(error);
     toast("Erreur de chargement des parties");
@@ -282,18 +329,13 @@ const placeLabel = (name) => (name ? name : "Sans lieu");
 // All selectable places, sorted; includes "" if any game has no place.
 function allPlaces() {
   const map = new Map(); // lowercased -> display
-  let hasNoPlace = false;
-  GAMES.forEach((g) => {
-    const n = (g.place || "").trim();
-    if (n) map.set(n.toLowerCase(), n);
-    else hasNoPlace = true;
-  });
+  (PLACES.names || []).forEach((n) => map.set(n.toLowerCase(), n));
   localPlaces().forEach((n) => {
     const t = n.trim();
     if (t) map.set(t.toLowerCase(), t);
   });
   const list = [...map.values()].sort((a, b) => a.localeCompare(b, "fr"));
-  if (hasNoPlace) list.unshift("");
+  if (PLACES.hasNoPlace) list.unshift("");
   return list;
 }
 function gamesForPlace(place) {
@@ -543,6 +585,7 @@ let route = { name: "place" };
 let homeFilter = "today"; // games list date filter: "today" | "week" | "month" | "all"
 let pollTimer = null;
 let durationTimer = null; // ticks the live game-duration chip every second
+let statsRedraw = null; // redraws the stats table in place (filters preserved)
 
 function routeToHash(name, params = {}) {
   const base = params.id ? `${name}/${params.id}` : name;
@@ -575,8 +618,12 @@ function go(name, params = {}) {
   window.scrollTo(0, 0); // always start a new screen at the top
 }
 
-window.addEventListener("hashchange", () => {
+window.addEventListener("hashchange", async () => {
   selectPlaceFromHash(location.hash);
+  // The URL may point to another place (deep link / back button): reload its
+  // games before rendering.
+  if (getSelectedPlace() !== LOADED_PLACE)
+    await fetchGames(getSelectedPlace());
   const newRoute = hashToRoute(location.hash);
   // Ne pas re-render si seul le nom/id correspond déjà (évite d'écraser prefill
   // après un go(), et le double-render qu'il provoquerait).
@@ -631,7 +678,11 @@ function render() {
     startHomePolling(); // live-refresh the games list every 2s
     return;
   }
-  if (route.name === "stats") return renderStats();
+  if (route.name === "stats") {
+    renderStats();
+    startStatsPolling(); // live-refresh the stats table every 2s
+    return;
+  }
   if (route.name === "entry") return renderEntry(route.id);
   if (route.name === "game") {
     renderGame(route.id);
@@ -672,6 +723,22 @@ function startHomePolling() {
     await fetchGames();
     if (route.name !== "home") return;
     if (JSON.stringify(gamesForPlace(place)) !== before) renderHome();
+  }, 2000);
+}
+// Auto-refresh the stats table (mirrors the home polling). Redraws in place so
+// the selected version/metric filters are kept.
+function startStatsPolling() {
+  stopPolling();
+  if (!db) return; // nothing to sync from in local mode
+  pollTimer = setInterval(async () => {
+    if (route.name !== "stats") return stopPolling();
+    if (document.querySelector("#modal-root .overlay")) return;
+    const place = getSelectedPlace();
+    const before = JSON.stringify(gamesForPlace(place));
+    await fetchGames();
+    if (route.name !== "stats") return;
+    if (JSON.stringify(gamesForPlace(place)) !== before && statsRedraw)
+      statsRedraw();
   }, 2000);
 }
 function startPolling(id) {
@@ -1349,7 +1416,7 @@ function renderPlace() {
   const input = wrap.querySelector("#placeInput");
   if (current) input.value = current;
 
-  const submit = () => {
+  const submit = async () => {
     const name = input.value.trim();
     if (!name) return toast("Indiquez un lieu");
     const existing = allPlaces()
@@ -1361,6 +1428,7 @@ function renderPlace() {
       addLocalPlace(name); // new → create it
       setSelectedPlace(name);
     }
+    await fetchGames(getSelectedPlace()); // load the chosen place's games
     go("home");
   };
   wrap.querySelector("#continue").addEventListener("click", submit);
@@ -2005,12 +2073,14 @@ function renderGame(id) {
   const ws = winners(game);
   if (ws.length) {
     const names = winnersLabel(ws);
+    // A team winner (Contrée) is plural even though there's a single team.
+    const plural = ws.length > 1 || defFor(game).teams;
     const banner = game.cancelled
       ? el(
-          `<div class="banner banner-cancelled"><i class="fa-regular fa-ban"></i> Partie annulée — ${ws.length > 1 ? "Vainqueurs" : "Vainqueur"} : <b>${names}</b> (${ws[0].total} pts)</div>`,
+          `<div class="banner banner-cancelled"><i class="fa-regular fa-ban"></i> Partie annulée — ${plural ? "Vainqueurs" : "Vainqueur"} : <b>${names}</b> (${ws[0].total} pts)</div>`,
         )
       : el(
-          `<div class="banner">${confettiMarkup()}<span class="crown"><i class="fa-regular fa-trophy"></i></span> <b>${names}</b> ${ws.length > 1 ? "gagnent" : "gagne"} avec ${ws[0].total} points !</div>`,
+          `<div class="banner">${confettiMarkup()}<span class="crown"><i class="fa-regular fa-trophy"></i></span> <b>${names}</b> ${plural ? "gagnent" : "gagne"} avec ${ws[0].total} points !</div>`,
         );
     app.appendChild(wrapPanel(banner));
   }
@@ -2042,8 +2112,8 @@ function renderGame(id) {
   }
 
   const linksWrap = el(`<div class="rules-link-wrap game-links-row">
-    <button class="link-btn" id="showDetails"><i class="fa-regular fa-clipboard-list"></i> Voir les détails</button>
-    <button class="link-btn" id="newGameSamePlayers"><i class="fa-regular fa-arrows-rotate"></i> Nouvelle partie avec ces joueurs</button>
+    <button class="link-btn" id="showDetails"><i class="fa-regular fa-clipboard-list"></i> Détails</button>
+    <button class="link-btn" id="newGameSamePlayers"><i class="fa-regular fa-arrows-rotate"></i> Rejouer</button>
   </div>`);
   linksWrap
     .querySelector("#showDetails")
@@ -2130,7 +2200,7 @@ function buildSummary(game, st, w) {
     const drew = !!(turnDraft && turnCur && p.id === turnCur.id && turnDraft.drawn);
     let preview = "";
     if (eliminated) {
-      preview = '<span class="elim-tag">éliminé.e</span>';
+      preview = ""; // no badge for a player eliminated in the in-progress round
     } else if (drew) {
       preview = '<span class="elim-tag">Pioche</span>';
     } else if (hasDraftFor(p)) {
@@ -3687,6 +3757,9 @@ function renderStats() {
     content.appendChild(wrap);
   }
 
+  // Expose the in-place redraw so polling can refresh the table while keeping
+  // the selected version/metric filters (closures over statMode/statMetric).
+  statsRedraw = draw;
   syncMetricControls();
   draw();
 }
@@ -3715,13 +3788,15 @@ function renderStats() {
 /* ---------- boot ---------- */
 (async function boot() {
   app.innerHTML = `<div class="panel-wrap"><div class="empty">Chargement…</div></div>`;
-  await fetchGames();
+  await fetchPlaces();
   if (location.hash) {
     selectPlaceFromHash(location.hash);
+    await fetchGames(getSelectedPlace());
     route = hashToRoute(location.hash);
     render();
   } else if (getSelectedPlace() !== null) {
     // No deep-link but a place is known: go home and reflect it in the URL.
+    await fetchGames(getSelectedPlace());
     go("home");
   } else {
     route = { name: "place" };
