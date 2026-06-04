@@ -51,6 +51,11 @@
   --contree-dark: #577e52; /* darker stop / border */
   --contree-glow: rgba(111, 158, 105, 0.45);
 
+  /* Yams accent */
+  --yams: #d82d21; /* lighter gradient stop / base */
+  --yams-dark: #ab2019; /* darker stop / border */
+  --yams-glow: rgba(216, 45, 33, 0.45);
+
   --surface: #eff8f7; /* page bg */
   --card: #ffffff; /* card bg */
 
@@ -886,6 +891,11 @@ input:focus {
   border-color: var(--contree-dark);
   box-shadow: 0 2px 12px var(--contree-glow);
 }
+.rules-tab.active[data-tab="yams"] {
+  background: linear-gradient(135deg, var(--yams), var(--yams-dark));
+  border-color: var(--yams-dark);
+  box-shadow: 0 2px 12px var(--yams-glow);
+}
 
 /* top navigation tabs (Home / Stats) — filled pill for the active tab */
 .nav-tabs {
@@ -1043,6 +1053,11 @@ input:focus {
   border-color: var(--contree-dark);
   box-shadow: 0 2px 12px var(--contree-glow);
 }
+#versionFilter button.active[data-v="yams"] {
+  background: linear-gradient(135deg, var(--yams), var(--yams-dark));
+  border-color: var(--yams-dark);
+  box-shadow: 0 2px 12px var(--yams-glow);
+}
 .stat-metric-select {
   appearance: none;
   -webkit-appearance: none;
@@ -1149,6 +1164,11 @@ input:focus {
   border-color: var(--contree-dark);
   box-shadow: 0 2px 12px var(--contree-glow);
 }
+.mode-tab.active[data-mode="yams"] {
+  background: linear-gradient(135deg, var(--yams), var(--yams-dark));
+  border-color: var(--yams-dark);
+  box-shadow: 0 2px 12px var(--yams-glow);
+}
 .badge.mode-classic {
   background: linear-gradient(135deg, var(--classic), var(--classic-dark));
   color: #fff;
@@ -1171,6 +1191,10 @@ input:focus {
 }
 .badge.mode-contree {
   background: linear-gradient(135deg, var(--contree), var(--contree-dark));
+  color: #fff;
+}
+.badge.mode-yams {
+  background: linear-gradient(135deg, var(--yams), var(--yams-dark));
   color: #fff;
 }
 
@@ -1463,6 +1487,10 @@ input.cell-input.cell-zero:focus {
   padding: 0.25rem 0.375rem;
   border-radius: var(--r-round);
   box-shadow: var(--shadow-sm);
+}
+/* "Doublé" badge (Skyjo ×2) — same shape as the Flip 7 tag, green accent */
+.dbl-tag {
+  background: var(--skyjo-dark);
 }
 .total-cell {
   font-weight: 800;
@@ -1920,6 +1948,32 @@ tfoot td .btn-icon {
 }
 .entry-player.flipped .pname {
   color: var(--sky);
+}
+
+/* ×2 doubling toggle (Skyjo) — green like the Skyjo accent */
+.x2-btn {
+  font-weight: 900;
+  color: var(--skyjo-dark);
+  border-color: rgba(81, 180, 124, 0.55);
+}
+.x2-btn.active {
+  background: linear-gradient(135deg, var(--skyjo), var(--skyjo-dark));
+  color: #fff;
+  border-color: var(--skyjo-dark);
+  box-shadow: 0 2px 12px var(--skyjo-glow);
+}
+/* entry row with ×2 active */
+.entry-player.doubled {
+  border-color: rgba(81, 180, 124, 0.4);
+  border-left-color: var(--skyjo);
+  background: linear-gradient(
+    90deg,
+    rgba(81, 180, 124, 0.16),
+    var(--teal-bg) 55%
+  );
+}
+.entry-player.doubled .pname {
+  color: var(--skyjo-dark);
 }
 
 /* ---------- modal ---------- */
@@ -2477,4 +2531,199 @@ body:has(.overlay) {
   .tagline {
     display: none;
   }
+}
+
+/* ---------- Yams (dice scorecard) ---------- */
+/* Entry dialog: pick a mission, then set its value or scratch it. */
+.yams-missions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 0.875rem;
+}
+.yams-mission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 2px solid var(--teal-light);
+  border-radius: var(--r-round);
+  background: var(--card);
+  color: var(--teal-dark);
+  font-weight: 800;
+  font-size: 0.9375rem;
+  cursor: pointer;
+  transition:
+    filter 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.yams-mission:hover {
+  filter: brightness(1.03);
+}
+.yams-mission.active {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+  box-shadow: var(--shadow-teal-glow);
+}
+/* Already-played mission: visible but locked, showing the marked score. */
+.yams-mission:disabled,
+.yams-mission.filled {
+  opacity: 0.6;
+  cursor: default;
+  background: var(--surface);
+  color: var(--muted);
+  border-color: var(--teal-light);
+  box-shadow: none;
+  filter: none;
+}
+.yams-mission.filled .yams-fixed {
+  background: var(--teal-bg);
+  color: var(--muted);
+}
+.yams-mission-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.yams-fixed {
+  flex: none;
+  font-size: 0.8125rem;
+  font-weight: 900;
+  padding: 0.0625rem 0.4375rem;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--teal-dark);
+}
+.yams-mission.active .yams-fixed {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+.yams-value {
+  border-top: 2px dashed var(--teal-light);
+  padding-top: 0.875rem;
+}
+.yams-value-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.yams-value-label {
+  font-weight: 900;
+  color: var(--teal-dark);
+  flex: 1;
+}
+.yams-value-row .cell-input {
+  width: 5rem;
+  flex: none;
+}
+.yams-value-fixed {
+  font-weight: 900;
+  font-size: 1.125rem;
+  color: var(--teal-dark);
+}
+.yams-value-fixed.struck {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.yams-scratch.active {
+  background: linear-gradient(135deg, var(--yams), var(--yams-dark));
+  border-color: var(--yams-dark);
+  color: #fff;
+}
+.yams-hint {
+  margin: 0.375rem 0 0;
+  font-size: 0.8125rem;
+}
+
+/* Details scorecard: missions × players. */
+.yams-table th,
+.yams-table td {
+  text-align: center;
+}
+.yams-table .player-name {
+  text-align: left;
+  white-space: nowrap;
+}
+.yams-section td {
+  background: var(--surface);
+  font-weight: 900;
+  color: var(--teal-dark);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  text-align: left;
+}
+.yams-fixed-tag {
+  display: inline-block;
+  margin-left: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0.1875rem 0.4375rem;
+  border-radius: 999px;
+  background: var(--teal-bg);
+  color: var(--teal-dark);
+  vertical-align: middle;
+}
+.yams-cell {
+  position: relative;
+}
+.yams-pts {
+  font-weight: 800;
+}
+.yams-pts.struck {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+/* Editable upper-section cell: die count input. */
+.yams-up-input {
+  width: 3.25rem;
+  text-align: center;
+  padding: 0.3125rem 0.25rem;
+  font-weight: 800;
+  margin: 0 auto;
+}
+.yams-up-input.struck {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+/* Lower-section toggle: looks like an input, flips value ↔ 0 on click. */
+.yams-toggle {
+  min-width: 3.25rem;
+  padding: 0.3125rem 0.625rem;
+  border: 2px solid var(--teal-light);
+  border-radius: var(--r-round);
+  background: var(--card);
+  color: var(--teal-dark);
+  font-weight: 800;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+.yams-toggle:hover {
+  filter: brightness(1.04);
+}
+.yams-toggle.active {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+  box-shadow: var(--shadow-teal-glow);
+}
+.yams-empty {
+  color: var(--teal-light);
+}
+.yams-subtotal td,
+.yams-bonus td {
+  background: var(--teal-bg);
+  font-weight: 800;
+}
+.yams-bonus-on {
+  color: var(--success);
+  font-weight: 900;
+}
+.yams-total td {
+  border-top: 2px solid var(--teal-light);
+  font-weight: 900;
 }

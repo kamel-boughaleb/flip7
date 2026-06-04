@@ -32,8 +32,10 @@ const RULESETS = {
     scoreOrder: "asc", // lower total ranks first
     entry: "number",
     negatives: true, // scores can be negative (adds a ± sign toggle)
+    doubling: true, // the round score can be doubled (×2 button)
     cellValue(cell) {
-      return Number(cell && cell.points) || 0;
+      const pts = Number(cell && cell.points) || 0;
+      return cell && cell.doubled ? pts * 2 : pts;
     },
   },
   timesup: {
@@ -63,7 +65,78 @@ const RULESETS = {
       return Number(cell && cell.points) || 0;
     },
   },
+  yams: {
+    turnBased: true, // one player fills one category per turn, in turn order
+    autoEndFilled: true, // ends when every player has filled all categories
+    scoreOrder: "desc", // highest total wins
+    entry: "yams", // bespoke flow: pick a mission, enter/auto its value, or scratch
+    cellValue(cell) {
+      return Number(cell && cell.points) || 0;
+    },
+    // The upper-section bonus (+35 at ≥63) is aggregate, so it lives outside
+    // cellValue and is added on top of the cell sum in playerTotal.
+    extraTotal(game, playerId) {
+      return yamsUpperBonus(game, playerId);
+    },
+  },
 };
+
+/* ---------- Yams scorecard ----------
+   The 13 "missions" of the contract. Upper section (As→Six) scores the sum of
+   the matching dice (variable, entered by hand); the bonus rewards filling it
+   generously. Lower section mixes fixed-value combos (Full, suites, Yams) and
+   variable ones (Brelan, Carré, Chance). Any mission can be "barrée" (0 pts).
+   A stored cell is { category, points }; points 0 means a scratched mission. */
+const YAMS_CATEGORIES = [
+  { key: "ones", label: "As", section: "upper", fixed: null, face: 1 },
+  { key: "twos", label: "Deux", section: "upper", fixed: null, face: 2 },
+  { key: "threes", label: "Trois", section: "upper", fixed: null, face: 3 },
+  { key: "fours", label: "Quatre", section: "upper", fixed: null, face: 4 },
+  { key: "fives", label: "Cinq", section: "upper", fixed: null, face: 5 },
+  { key: "sixes", label: "Six", section: "upper", fixed: null, face: 6 },
+  { key: "brelan", label: "Brelan", section: "lower", fixed: 25 },
+  { key: "carre", label: "Carré", section: "lower", fixed: 35 },
+  { key: "full", label: "Full", section: "lower", fixed: 30 },
+  { key: "petite", label: "Petite suite", section: "lower", fixed: 25 },
+  { key: "grande", label: "Grande suite", section: "lower", fixed: 40 },
+  { key: "yams", label: "Yam's", section: "lower", fixed: 50 },
+];
+const YAMS_UPPER_KEYS = ["ones", "twos", "threes", "fours", "fives", "sixes"];
+const YAMS_BONUS_MIN = 63; // upper-section sum unlocking the bonus
+const YAMS_BONUS = 35; // bonus points awarded once the threshold is reached
+function yamsCat(key) {
+  return YAMS_CATEGORIES.find((c) => c.key === key) || null;
+}
+// Categories a player has already filled (set of keys).
+function yamsFilled(game, playerId) {
+  const s = new Set();
+  game.rounds.forEach((r) => {
+    const c = r.scores[playerId];
+    if (c && c.category) s.add(c.category);
+  });
+  return s;
+}
+// Sum of a player's upper-section cells (As→Six), used for the bonus check.
+function yamsUpperSum(game, playerId) {
+  return game.rounds.reduce((sum, r) => {
+    const c = r.scores[playerId];
+    return c && YAMS_UPPER_KEYS.includes(c.category)
+      ? sum + (Number(c.points) || 0)
+      : sum;
+  }, 0);
+}
+function yamsUpperBonus(game, playerId) {
+  return yamsUpperSum(game, playerId) >= YAMS_BONUS_MIN ? YAMS_BONUS : 0;
+}
+// Every player has filled all missions → the game is over.
+function yamsComplete(game) {
+  return (
+    game.players.length > 0 &&
+    game.players.every(
+      (p) => yamsFilled(game, p.id).size >= YAMS_CATEGORIES.length,
+    )
+  );
+}
 
 // Trump suits for Contrée bids (4 colours, icons via Unicode pips).
 const CONTREE_SUITS = [
@@ -120,6 +193,11 @@ const MODES = {
     label: "Contrée",
     ruleset: "contree",
     rules: () => rulesContreeHTML(),
+  },
+  yams: {
+    label: "Yam's",
+    ruleset: "yams",
+    rules: () => rulesYamsHTML(),
   },
 };
 const DEFAULT_MODE = "classic";
@@ -409,10 +487,12 @@ function firstDuplicateName(names) {
 /* ---------- scoring ---------- */
 function playerTotal(game, playerId) {
   const def = defFor(game);
-  return game.rounds.reduce(
+  const base = game.rounds.reduce(
     (sum, r) => sum + def.cellValue(r.scores[playerId]),
     0,
   );
+  // Some games (Yams) add an aggregate bonus on top of the per-cell sum.
+  return base + (def.extraTotal ? def.extraTotal(game, playerId) : 0);
 }
 // Standings sorted by the game's order (Flip 7: highest first; Skyjo: lowest
 // first). The leader — best by the game's rules — is always s[0]. Team games
@@ -469,6 +549,7 @@ function currentDealer(game) {
 function isGameOver(game, s) {
   const def = defFor(game);
   if (def.manualEnd) return !!game.ended; // user closes the game by hand
+  if (def.autoEndFilled) return yamsComplete(game); // Yams: every card filled
   if (def.rounds) return game.rounds.length >= def.rounds;
   return s.some((p) => p.total >= game.target);
 }
@@ -513,13 +594,26 @@ function currentPlayer(game) {
   if (!game.starter) return null;
   const order = turnOrder(game);
   if (!order.length) return null;
-  if (!game.rounds.length) return order[0];
-  const last = game.rounds[game.rounds.length - 1];
-  const lastPid = Object.keys(last.scores)[0];
-  const idx = order.findIndex((p) => p.id === lastPid);
-  return idx < 0
-    ? order[game.rounds.length % order.length]
-    : order[(idx + 1) % order.length];
+  // Where the next turn lands: just after the last player who scored, or the
+  // starter before any turn (robust to deleting a turn from the details screen).
+  let start;
+  if (!game.rounds.length) start = 0;
+  else {
+    const lastPid = Object.keys(game.rounds[game.rounds.length - 1].scores)[0];
+    const idx = order.findIndex((p) => p.id === lastPid);
+    start = idx < 0 ? game.rounds.length % order.length : (idx + 1) % order.length;
+  }
+  // Yams: skip players whose card is already full (can happen after correcting
+  // a finished game by clearing a cell). Other turn-based games never skip.
+  const done =
+    defFor(game).entry === "yams"
+      ? (p) => yamsFilled(game, p.id).size >= YAMS_CATEGORIES.length
+      : () => false;
+  for (let n = 0; n < order.length; n++) {
+    const cand = order[(start + n) % order.length];
+    if (!done(cand)) return cand;
+  }
+  return null; // everyone is done
 }
 // Noun for the scoring unit: "donne" (Contrée), "tour" (turn-based), else
 // "manche".
@@ -1339,6 +1433,38 @@ function rulesContreeHTML() {
       <li>Sur la partie : choisissez <b>qui distribue</b>, puis saisissez la <b>mise</b> (contrat 80→160 ou <b>Capot</b>, atout, équipe qui prend, contré/surcontré). Elle est rappelée en haut du tableau.</li>
       <li>Pour le score, entrez les <b>points de plis</b> d'une équipe (l'autre se complète à <b>160</b>, arrondi à la dizaine) et signalez une éventuelle <b>Belote (+20)</b>.</li>
       <li>L'app <b>calcule automatiquement</b> le score de la donne (contrat réussi/chuté, contré ×2, surcontré ×4, capot) et indique si le contrat est tenu. La distribution passe ensuite au joueur suivant.</li>
+    </ul>`;
+}
+
+function rulesYamsHTML() {
+  return `
+    <p class="rules-intro">Le <b>Yam's</b> (Yahtzee) est un jeu de <b>dés</b> : à chaque tour, on lance cinq dés (jusqu'à 3 lancers) pour réaliser une <b>combinaison</b>, puis on l'inscrit dans une <b>case du contrat</b>. Chaque case ne sert qu'<b>une seule fois</b>. Le plus haut total l'emporte.</p>
+
+    <h3><i class="fa-regular fa-dice"></i> Le matériel</h3>
+    <ul>
+      <li><b>5 dés</b> et une <b>feuille de marque</b> par joueur (les 12 cases du contrat).</li>
+      <li>À son tour : jusqu'à <b>3 lancers</b>, en gardant les dés voulus entre chaque relance.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-list-check"></i> Les 12 missions</h3>
+    <ul>
+      <li><b>Section haute</b> — As, Deux, Trois, Quatre, Cinq, Six : on marque la <b>somme des dés</b> de la valeur choisie.</li>
+      <li><b>Brelan</b> (3 identiques) = <b>25</b> · <b>Carré</b> (4 identiques) = <b>35</b> · <b>Full</b> (brelan + paire) = <b>30</b>.</li>
+      <li><b>Petite suite</b> (4 à la suite) = <b>25</b> · <b>Grande suite</b> (5 à la suite) = <b>40</b> · <b>Yam's</b> (5 identiques) = <b>50</b>.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-star"></i> Le bonus</h3>
+    <p>Si le total de la <b>section haute</b> atteint <b>63 points</b>, on gagne un <b>bonus de +35</b>.</p>
+
+    <h3><i class="fa-regular fa-trophy"></i> Fin de la partie</h3>
+    <p>La partie s'arrête quand <b>tous les joueurs ont rempli leurs 12 cases</b>. Le joueur au <b>plus haut total</b> (cases + bonus) gagne.</p>
+
+    <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
+    <ul>
+      <li>Au démarrage, choisissez <b>« Qui commence ? »</b> ; les tours s'enchaînent ensuite <b>dans l'ordre des joueurs</b>.</li>
+      <li>À chaque tour, choisissez la <b>mission</b> à inscrire. Pour la <b>section haute</b>, indiquez le <b>nombre de dés</b> de la face (l'app multiplie par la valeur) ; les figures fixes sont remplies automatiquement. Vous pouvez aussi <b>barrer</b> la case (0 point).</li>
+      <li>Le <b>bonus de +35</b> est <b>calculé automatiquement</b> dès que la section haute atteint 63.</li>
+      <li>La partie se <b>termine d'elle-même</b> une fois toutes les cases remplies ; le joueur en tête est couronné.</li>
     </ul>`;
 }
 
@@ -2250,9 +2376,11 @@ function renderDetails(id) {
     wrapPanel(
       defFor(game).teams
         ? buildContreeTable(game)
-        : defFor(game).turnBased
-          ? buildTurnTable(game)
-          : buildTable(game, rankMap, w),
+        : defFor(game).entry === "yams"
+          ? buildYamsTable(game)
+          : defFor(game).turnBased
+            ? buildTurnTable(game)
+            : buildTable(game, rankMap, w),
     ),
   );
 }
@@ -2325,6 +2453,157 @@ function buildTurnTable(game) {
     });
 
     tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+// Details for Yams: a proper scorecard — one row per mission, one column per
+// player — with the upper subtotal, the +35 bonus row, and the grand total.
+// Filled cells stay editable: upper-section cells take a die count (score =
+// count × face), lower-section cells toggle between the mission value and 0.
+function buildYamsTable(game) {
+  const players = game.players;
+  const winIds = new Set(winners(game).map((p) => p.id));
+  // category key -> { [playerId]: { points, idx } }
+  const byCat = {};
+  game.rounds.forEach((r, idx) => {
+    const pid = Object.keys(r.scores)[0];
+    const cell = r.scores[pid];
+    if (!cell || !cell.category) return;
+    if (!byCat[cell.category]) byCat[cell.category] = {};
+    byCat[cell.category][pid] = { points: Number(cell.points) || 0, idx };
+  });
+
+  const wrap = el(`<div class="table-wrap"></div>`);
+  const table = el(`<table class="score yams-table"></table>`);
+  let thead = `<thead><tr><th class="player-name">Mission</th>`;
+  players.forEach((p) => {
+    const crown = winIds.has(p.id)
+      ? ' <span class="crown"><i class="fa-regular fa-crown"></i></span>'
+      : "";
+    thead += `<th>${esc(p.name)}${crown}</th>`;
+  });
+  thead += `</tr></thead>`;
+  table.innerHTML = thead;
+  const tbody = el(`<tbody></tbody>`);
+
+  const cellHtml = (catKey, pid) => {
+    const e = byCat[catKey] && byCat[catKey][pid];
+    if (!e) return `<td class="yams-cell yams-empty">·</td>`;
+    const cat = yamsCat(catKey);
+    const struck = e.points === 0 ? " struck" : "";
+    if (cat.section === "upper") {
+      // Editable die count: at rest the input shows the computed score; focusing
+      // reveals the die count; blur saves count × face.
+      return `<td class="yams-cell"><input type="number" inputmode="numeric" class="cell-input yams-up-input${struck}" data-cat="${catKey}" data-pid="${pid}" data-face="${cat.face}" value="${e.points}" /></td>`;
+    }
+    // Lower section: an active/inactive toggle showing the mission's score;
+    // active = it counts, inactive = barré (0). Clicking flips the state.
+    const on = e.points !== 0;
+    return `<td class="yams-cell"><button type="button" class="yams-toggle${on ? " active" : ""}" data-cat="${catKey}" data-pid="${pid}" data-fixed="${cat.fixed}">${cat.fixed}</button></td>`;
+  };
+  const rowFor = (cat) =>
+    el(
+      `<tr><td class="player-name">${esc(cat.label)}${cat.fixed != null ? ` <span class="yams-fixed-tag">${cat.fixed}</span>` : ""}</td>${players.map((p) => cellHtml(cat.key, p.id)).join("")}</tr>`,
+    );
+
+  tbody.appendChild(
+    el(
+      `<tr class="yams-section"><td colspan="${players.length + 1}">Section haute</td></tr>`,
+    ),
+  );
+  YAMS_CATEGORIES.filter((c) => c.section === "upper").forEach((c) =>
+    tbody.appendChild(rowFor(c)),
+  );
+  tbody.appendChild(
+    el(
+      `<tr class="yams-subtotal"><td class="player-name">Sous-total</td>${players
+        .map(
+          (p) =>
+            `<td class="yams-cell"><span class="yams-pts">${yamsUpperSum(game, p.id)}</span></td>`,
+        )
+        .join("")}</tr>`,
+    ),
+  );
+  tbody.appendChild(
+    el(
+      `<tr class="yams-bonus"><td class="player-name">Bonus (≥${YAMS_BONUS_MIN})<span class="yams-fixed-tag">+${YAMS_BONUS}</span></td>${players
+        .map((p) => {
+          const b = yamsUpperBonus(game, p.id);
+          return `<td class="yams-cell"><span class="yams-pts${b ? " yams-bonus-on" : ""}">${b ? "+" + b : "—"}</span></td>`;
+        })
+        .join("")}</tr>`,
+    ),
+  );
+  tbody.appendChild(
+    el(
+      `<tr class="yams-section"><td colspan="${players.length + 1}">Section basse</td></tr>`,
+    ),
+  );
+  YAMS_CATEGORIES.filter((c) => c.section === "lower").forEach((c) =>
+    tbody.appendChild(rowFor(c)),
+  );
+  tbody.appendChild(
+    el(
+      `<tr class="yams-total"><td class="player-name">Total</td>${players
+        .map(
+          (p) =>
+            `<td class="yams-cell"><span class="score-badge">${playerTotal(game, p.id)}</span></td>`,
+        )
+        .join("")}</tr>`,
+    ),
+  );
+
+  // Helper: find a player's round for a given category and rewrite its points.
+  const setCellPoints = (pid, catKey, pts) => {
+    const g = getGame(game.id);
+    const beforeWinnerId = (winner(g) || {}).id || null;
+    const i = g.rounds.findIndex((r) => {
+      const c = r.scores[pid];
+      return c && c.category === catKey;
+    });
+    if (i < 0) return;
+    g.rounds[i].scores[pid].points = pts;
+    upsertGame(g);
+    renderDetails(game.id);
+    celebrateIfNewWinner(beforeWinnerId, g);
+  };
+
+  // Upper-section cells: editable die count (score = count × face).
+  tbody.querySelectorAll(".yams-up-input").forEach((input) => {
+    const face = Number(input.dataset.face) || 1;
+    const { cat: catKey, pid } = input.dataset;
+    const points = Number(input.value) || 0; // computed score shown at rest
+    input.addEventListener("focus", () => {
+      input.value = String(Math.round(points / face)); // reveal the die count
+      input.select();
+    });
+    const commit = () => {
+      const count = Math.max(0, Math.min(5, Math.round(Number(input.value) || 0)));
+      const pts = count * face;
+      if (pts === points) {
+        input.value = String(points); // unchanged: restore the at-rest display
+        return;
+      }
+      setCellPoints(pid, catKey, pts);
+    };
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") input.blur();
+    });
+  });
+
+  // Lower-section cells: toggle between the mission value and 0 (barré).
+  tbody.querySelectorAll(".yams-toggle").forEach((btn) => {
+    const { cat: catKey, pid } = btn.dataset;
+    const fixed = Number(btn.dataset.fixed) || 0;
+    btn.addEventListener("click", () => {
+      const on = btn.classList.contains("active"); // currently counts
+      setCellPoints(pid, catKey, on ? 0 : fixed);
+    });
   });
 
   table.appendChild(tbody);
@@ -2428,9 +2707,63 @@ function buildTable(game, rankMap, w) {
         tr.appendChild(td);
         return;
       }
-      // Number games (Skyjo, Time's Up!): a plain editable number. No inputmode
+      // Doubling games (Skyjo): mirror the Flip 7 cell. At rest the input shows
+      // the entered points with a "Doublé" badge when doubled; focusing reveals
+      // the "15x2" expression so the ×2 can be added or removed by typing.
+      if (def.doubling) {
+        const doubled = !cell.bust && !!cell.doubled;
+        td.innerHTML = `<span class="cell-box"><input type="text" class="cell-input${pts === 0 && !doubled ? " cell-zero" : ""}" value="${esc(String(pts))}" />${doubled ? '<span class="flip7-tag dbl-tag">Doublé</span>' : ""}</span>`;
+        const input = td.querySelector("input");
+        const box = td.querySelector(".cell-box");
+        const setBadge = (on) => {
+          const tag = box.querySelector(".dbl-tag");
+          if (on && !tag)
+            box.insertAdjacentHTML(
+              "beforeend",
+              '<span class="flip7-tag dbl-tag">Doublé</span>',
+            );
+          else if (!on && tag) tag.remove();
+        };
+        input.addEventListener("focus", () => {
+          if (box.querySelector(".dbl-tag"))
+            input.value = `${Number(input.value) || 0}x2`;
+        });
+        input.addEventListener("input", () => {
+          const { points, doubled: d2 } = parseSkyjoInput(input.value);
+          setBadge(d2);
+          input.classList.toggle("cell-zero", points === 0 && !d2);
+        });
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") input.blur();
+        });
+        const restoreDisplay = () => {
+          input.value = String(pts);
+          setBadge(doubled);
+          input.classList.toggle("cell-zero", pts === 0 && !doubled);
+        };
+        input.addEventListener("blur", () => {
+          const { points, doubled: d2 } = parseSkyjoInput(input.value);
+          if (points === pts && d2 === doubled) {
+            restoreDisplay(); // nothing changed: collapse to the at-rest display
+            return;
+          }
+          const g = getGame(game.id);
+          const beforeWinnerId = (winner(g) || {}).id || null;
+          const c = g.rounds[ri].scores[p.id] || { points: 0 };
+          c.points = points;
+          if (d2) c.doubled = true;
+          else delete c.doubled;
+          g.rounds[ri].scores[p.id] = c;
+          upsertGame(g);
+          renderDetails(game.id);
+          celebrateIfNewWinner(beforeWinnerId, g);
+        });
+        tr.appendChild(td);
+        return;
+      }
+      // Other number games (Time's Up!): a plain editable number. No inputmode
       // so the classic number keyboard is used (keeps the "−" key reachable for
-      // Skyjo negatives).
+      // negatives).
       td.innerHTML = `
         <span class="cell-box"><input type="number" class="cell-input${pts === 0 ? " cell-zero" : ""}" value="${pts}" /></span>`;
       const input = td.querySelector("input");
@@ -2501,17 +2834,34 @@ function parseFlip7Input(value) {
   if (m) return { points: Number(m[1]) || 0, flip7: true };
   return { points: Number(v) || 0, flip7: false };
 }
+// Parse a Skyjo cell expression: a (possibly negative) number with an optional
+// "×2" suffix marking a doubled round, e.g. "15x2", "-3×2". Mirrors
+// parseFlip7Input — the "x2" is the editable counterpart of Flip 7's "+15".
+function parseSkyjoInput(value) {
+  const v = String(value).trim().replace(/\s+/g, "");
+  const m = v.match(/^(-?\d*)[x×*]2$/i);
+  if (m) return { points: Number(m[1]) || 0, doubled: true };
+  return { points: Number(v) || 0, doubled: false };
+}
 // Does a draft cell hold any entered data?
 function draftHasData(d) {
   return d && ((d.points !== "" && d.points != null) || d.flip7 || d.bust);
 }
-// Does a turn-based draft (Qwirkle) hold any entered data?
+// Does a turn-based draft (Qwirkle: points/drawn; Yams: a picked mission) hold
+// any entered data?
 function turnDraftHasData(d) {
-  return !!(d && ((d.points !== "" && d.points != null) || d.drawn));
+  return !!(
+    d &&
+    ((d.points !== "" && d.points != null) || d.drawn || d.category)
+  );
 }
 // Convert a draft cell to a stored round cell, per the game's entry style.
 function draftToCell(def, d) {
-  if (def.entry === "number") return { points: Number(d.points) || 0 };
+  if (def.entry === "number") {
+    const cell = { points: Number(d.points) || 0 };
+    if (def.doubling && d.doubled) cell.doubled = true; // ×2 round penalty
+    return cell;
+  }
   return {
     points: d.bust ? 0 : Number(d.points) || 0,
     flip7: d.bust ? false : !!d.flip7,
@@ -2528,11 +2878,12 @@ function buildEntryRow(game, draft, p, onChange) {
   const notify = () => onChange && onChange();
   if (def.entry === "number") {
     const row = el(`
-      <div class="entry-player">
+      <div class="entry-player${d.doubled ? " doubled" : ""}">
         <span class="pname">${esc(p.name)}</span>
         <div class="entry-controls">
           ${def.negatives ? '<button type="button" class="btn btn-ghost btn-sm sign-btn" title="Score négatif" aria-label="Inverser le signe">±</button>' : ""}
           <input type="number" inputmode="numeric" class="cell-input" placeholder="0" value="${esc(d.points)}" />
+          ${def.doubling ? `<button type="button" class="btn btn-ghost btn-sm x2-btn${d.doubled ? " active" : ""}" title="Doubler le score de la manche" aria-label="Doubler le score">×2</button>` : ""}
         </div>
       </div>`);
     const input = row.querySelector("input");
@@ -2547,6 +2898,14 @@ function buildEntryRow(game, draft, p, onChange) {
         input.value = v.startsWith("-") ? v.slice(1) : "-" + v;
         draft[p.id].points = input.value;
         input.focus();
+        notify();
+      });
+    const x2Btn = row.querySelector(".x2-btn");
+    if (x2Btn)
+      x2Btn.addEventListener("click", () => {
+        draft[p.id].doubled = !draft[p.id].doubled;
+        x2Btn.classList.toggle("active", draft[p.id].doubled);
+        row.classList.toggle("doubled", draft[p.id].doubled);
         notify();
       });
     return row;
@@ -2739,7 +3098,12 @@ function buildTurnBar(game) {
   if (startBtn)
     startBtn.addEventListener("click", () => openStarterDialog(game));
   const scoreBtn = bar.querySelector("#turnScore");
-  if (scoreBtn) scoreBtn.addEventListener("click", () => openTurnDialog(game));
+  if (scoreBtn)
+    scoreBtn.addEventListener("click", () =>
+      defFor(game).entry === "yams"
+        ? openYamsDialog(game)
+        : openTurnDialog(game),
+    );
   const endBtn = bar.querySelector("#endGameBar");
   if (endBtn) endBtn.addEventListener("click", () => endGamePrompt(game));
   return bar;
@@ -2878,6 +3242,192 @@ function openTurnDialog(game) {
   });
   root.appendChild(overlay);
   if (!drawn) input.focus();
+}
+
+/* ---------- Yams (dice scorecard) ---------- */
+// Enter the current player's turn: pick a mission among those left on their
+// card, set its value (auto for fixed combos like Full/suites/Yams, typed for
+// the rest) or scratch it (0 pts). Saving commits a one-player round and
+// advances the turn. The in-progress pick is pre-saved to game.draftTurn so the
+// dialog can be closed and resumed.
+function openYamsDialog(game) {
+  const cur = currentPlayer(game);
+  if (!cur) return;
+  const turnNo = game.rounds.length + 1;
+  const filled = yamsFilled(game, cur.id);
+  // Points already marked by this player per mission (to show on filled cases).
+  const marked = {};
+  game.rounds.forEach((r) => {
+    const c = r.scores[cur.id];
+    if (c && c.category) marked[c.category] = Number(c.points) || 0;
+  });
+  const upperSum = yamsUpperSum(game, cur.id);
+  const saved =
+    game.draftTurn && game.draftTurn.category ? game.draftTurn : null;
+  let selKey =
+    saved && !filled.has(saved.category) ? saved.category : null;
+  let scratched = saved ? !!saved.scratched : false;
+  let rawValue = saved && saved.value != null ? String(saved.value) : "";
+
+  const root = document.getElementById("modal-root");
+  const overlay = el(`<div class="overlay"></div>`);
+  const modal = el(`<div class="modal modal-scores"></div>`);
+  overlay.appendChild(modal);
+
+  const bonusNote =
+    upperSum >= YAMS_BONUS_MIN
+      ? ` ✓ +${YAMS_BONUS}`
+      : ` (encore ${YAMS_BONUS_MIN - upperSum})`;
+  modal.innerHTML = `
+    <div class="rules-dialog-head">
+      <h3>Score de ${esc(cur.name)}</h3>
+      <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
+    </div>
+    <div class="scores-dialog-body">
+      <div class="turn-meta">Tour ${turnNo} · Section haute ${upperSum} / ${YAMS_BONUS_MIN}${bonusNote}</div>
+      <div class="yams-missions" id="yamsMissions"></div>
+      <div class="yams-value" id="yamsValue" hidden></div>
+    </div>
+    <div class="scores-dialog-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-act="close">Annuler</button>
+      <button class="btn btn-primary" id="saveYams">Enregistrer</button>
+    </div>`;
+
+  const missionsEl = modal.querySelector("#yamsMissions");
+  const valueEl = modal.querySelector("#yamsValue");
+
+  // All missions stay visible; already-played ones are disabled and show the
+  // score that was marked (fixed value, computed upper score, or 0 if scratched).
+  YAMS_CATEGORIES.forEach((c) => {
+    const done = filled.has(c.key);
+    const tag = done
+      ? `<span class="yams-fixed">${marked[c.key]}</span>`
+      : c.fixed != null
+        ? `<span class="yams-fixed">${c.fixed}</span>`
+        : "";
+    const btn = el(
+      `<button type="button" class="yams-mission yams-${c.section}${done ? " filled" : ""}" data-key="${c.key}"${done ? " disabled" : ""}><span class="yams-mission-name">${esc(c.label)}</span>${tag}</button>`,
+    );
+    if (!done)
+      btn.addEventListener("click", () => {
+        selKey = c.key;
+        scratched = false;
+        rawValue = "";
+        syncSel();
+        drawValue();
+        writeDraft();
+      });
+    missionsEl.appendChild(btn);
+  });
+
+  const syncSel = () =>
+    missionsEl
+      .querySelectorAll(".yams-mission")
+      .forEach((b) => b.classList.toggle("active", b.dataset.key === selKey));
+
+  function drawValue() {
+    if (!selKey) {
+      valueEl.hidden = true;
+      valueEl.innerHTML = "";
+      return;
+    }
+    const c = yamsCat(selKey);
+    valueEl.hidden = false;
+    const scratchBtnHtml = `<button type="button" class="btn btn-ghost btn-sm yams-scratch${scratched ? " active" : ""}" id="scratchBtn"><i class="fa-regular fa-ban"></i> Barrer (0)</button>`;
+    if (c.fixed != null) {
+      valueEl.innerHTML = `
+        <div class="yams-value-row">
+          <span class="yams-value-label">${esc(c.label)}</span>
+          <span class="yams-value-fixed${scratched ? " struck" : ""}">${scratched ? "0" : c.fixed} pts</span>
+          ${scratchBtnHtml}
+        </div>`;
+    } else {
+      const face = c.face || 1;
+      const computed = (Number(rawValue) || 0) * face;
+      const hint = `Nombre de ${esc(c.label.toLowerCase())} (× ${face})`;
+      valueEl.innerHTML = `
+        <div class="yams-value-row">
+          <span class="yams-value-label">${esc(c.label)}</span>
+          <input type="number" class="cell-input" id="yamsInput" placeholder="0" inputmode="numeric" min="0" max="5" aria-label="${hint}" value="${esc(scratched ? "" : rawValue)}" ${scratched ? "disabled" : ""} />
+          <span class="yams-value-fixed" id="yamsComputed">= ${computed} pts</span>
+          ${scratchBtnHtml}
+        </div>
+        <div class="yams-hint muted">${hint}</div>`;
+    }
+    valueEl.querySelector("#scratchBtn").addEventListener("click", () => {
+      scratched = !scratched;
+      drawValue();
+      writeDraft();
+    });
+    const input = valueEl.querySelector("#yamsInput");
+    if (input) {
+      input.addEventListener("input", () => {
+        rawValue = input.value;
+        const comp = valueEl.querySelector("#yamsComputed");
+        if (comp) {
+          const cc = yamsCat(selKey);
+          comp.textContent = `= ${(Number(rawValue) || 0) * (cc.face || 1)} pts`;
+        }
+        writeDraft();
+      });
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") save();
+      });
+      if (!scratched) input.focus();
+    }
+  }
+
+  // Effective numeric points for the current selection. Upper-section missions
+  // take a die count and score count × face; lower missions are fixed values.
+  const effPoints = () => {
+    if (!selKey || scratched) return 0;
+    const c = yamsCat(selKey);
+    if (c.fixed != null) return c.fixed;
+    return (Number(rawValue) || 0) * (c.face || 1);
+  };
+
+  const writeDraft = () => {
+    const g = getGame(game.id);
+    g.draftTurn = selKey
+      ? { category: selKey, scratched, value: rawValue, points: effPoints() }
+      : null;
+    upsertGame(g);
+  };
+
+  const closeKeepingDraft = () => {
+    writeDraft();
+    overlay.remove();
+    if (route.name === "game" && route.id === game.id)
+      go("game", { id: game.id });
+  };
+  modal
+    .querySelectorAll("[data-act=close]")
+    .forEach((b) => b.addEventListener("click", closeKeepingDraft));
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeKeepingDraft();
+  });
+
+  const save = () => {
+    if (!selKey) return toast("Choisissez une mission");
+    const points = effPoints();
+    const g = getGame(game.id);
+    g.rounds.push({
+      scores: { [cur.id]: { category: selKey, points } },
+      at: Date.now(),
+    });
+    g.draftTurn = null; // turn committed — clear the draft
+    upsertGame(g);
+    overlay.remove();
+    const cat = yamsCat(selKey);
+    toast(`${cur.name} — ${cat.label} : ${points} pts`);
+    go("game", { id: game.id });
+  };
+  modal.querySelector("#saveYams").addEventListener("click", save);
+
+  syncSel();
+  drawValue();
+  root.appendChild(overlay);
 }
 
 /* ---------- Contrée (teams + bids) ---------- */
@@ -3521,6 +4071,7 @@ const STAT_FILTERS = {
   timesup: { match: (g) => g.mode === "timesup", order: "desc" },
   qwirkle: { match: (g) => g.mode === "qwirkle", order: "desc" },
   contree: { match: (g) => g.mode === "contree", order: "desc" },
+  yams: { match: (g) => g.mode === "yams", order: "desc" },
 };
 function computeStats(place, filter = "flip7") {
   const f = STAT_FILTERS[filter] || STAT_FILTERS.flip7;
@@ -3649,10 +4200,19 @@ const STAT_METRICS = {
   },
   bestRound: {
     // A "round" is a "tour" in Qwirkle, a "manche" elsewhere.
-    label: (mode) => (mode === "qwirkle" ? "Meilleur tour" : "Meilleure manche"),
+    label: (mode) =>
+      mode === "qwirkle"
+        ? "Meilleur tour"
+        : mode === "yams"
+          ? "Meilleure case"
+          : "Meilleure manche",
     cols: () => [{ head: "Parties", get: (s) => s.games }],
     valueHead: (mode) =>
-      mode === "qwirkle" ? "Meilleur tour" : "Meilleure manche",
+      mode === "qwirkle"
+        ? "Meilleur tour"
+        : mode === "yams"
+          ? "Meilleure case"
+          : "Meilleure manche",
     value: (s) => s.bestRound ?? 0,
     sort: (order) => (a, b) =>
       (order === "asc"
@@ -3667,7 +4227,7 @@ const FLIP7_VERSIONS = new Set(["flip7", "classic", "vengeance"]);
 function metricsForVersion(mode) {
   if (FLIP7_VERSIONS.has(mode))
     return ["ranking", "elims", "flip7s", "bestGame", "bestRound"];
-  if (mode === "skyjo" || mode === "qwirkle")
+  if (mode === "skyjo" || mode === "qwirkle" || mode === "yams")
     return ["ranking", "bestGame", "bestRound"];
   return ["ranking"];
 }
@@ -3693,6 +4253,7 @@ function renderStats() {
     { key: "skyjo", label: "Skyjo" },
     { key: "timesup", label: "Time's Up!" },
     { key: "contree", label: "Contrée" },
+    { key: "yams", label: "Yam's" },
   ];
   let statMode = "flip7";
   let statMetric = "ranking";
