@@ -1491,7 +1491,10 @@ function renderHome() {
 
   const filterEl = el(`
     <div class="date-filter" id="dateFilter">
-      ${FILTERS.map((f) => `<button type="button" data-f="${f.key}" class="${f.key === homeFilter ? "active" : ""}">${f.label}</button>`).join("")}
+      ${FILTERS.map((f) => {
+        const n = filterGamesByDate(games, f.key).length;
+        return `<button type="button" data-f="${f.key}" class="${f.key === homeFilter ? "active" : ""}">${f.label} <span class="filter-count">${n}</span></button>`;
+      }).join("")}
     </div>`);
   filterEl.querySelectorAll("button").forEach((b) =>
     b.addEventListener("click", () => {
@@ -1937,16 +1940,12 @@ function renderGame(id) {
   const backRow = el(`
     <div class="row">
       <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
+      <span class="badge ${modeClass(game.mode)} ml-auto">${esc(modeLabel(game.mode))}</span>
     </div>`);
   backRow.querySelector("#back").addEventListener("click", () => go("home"));
-  app.appendChild(backRow);
 
   const head = el(`
     <div class="game-head game-head-stacked">
-      <div class="game-title-main">
-        <h2>${esc(game.name)}</h2>
-        <span class="badge ${modeClass(game.mode)}">${esc(modeLabel(game.mode))}</span>
-      </div>
       <div class="game-meta-row">
         ${roundNum}
         ${durationChip}
@@ -2055,7 +2054,11 @@ function renderGame(id) {
     }
   });
 
-  app.appendChild(head);
+  // Group the back row and the game info/actions in a single column.
+  const headerCol = el(`<div class="game-header-col"></div>`);
+  headerCol.appendChild(backRow);
+  headerCol.appendChild(head);
+  app.appendChild(headerCol);
 
   // Tick the duration chip every second while the game is ongoing; it freezes
   // automatically once a winner exists (re-render swaps in the frozen value).
@@ -2112,7 +2115,7 @@ function renderGame(id) {
   }
 
   const linksWrap = el(`<div class="rules-link-wrap game-links-row">
-    <button class="link-btn" id="showDetails"><i class="fa-regular fa-clipboard-list"></i> Détails</button>
+    <button class="link-btn" id="showDetails"${game.rounds.length ? "" : ' disabled title="Aucune manche enregistrée pour l\'instant"'}><i class="fa-regular fa-clipboard-list"></i> Détails</button>
     <button class="link-btn" id="newGameSamePlayers"><i class="fa-regular fa-arrows-rotate"></i> Rejouer</button>
   </div>`);
   linksWrap
@@ -2235,21 +2238,13 @@ function renderDetails(id) {
 
   const backRow = el(`
     <div class="row">
-      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
+      <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Scores</button>
+      <span class="badge ${modeClass(game.mode)} ml-auto">${esc(modeLabel(game.mode))}</span>
     </div>`);
   backRow
     .querySelector("#back")
     .addEventListener("click", () => go("game", { id: game.id }));
   app.appendChild(backRow);
-
-  app.appendChild(
-    el(`
-      <div class="game-head">
-        <h2>Détails des scores</h2>
-        <span class="badge ${modeClass(game.mode)}">${esc(modeLabel(game.mode))}</span>
-        <span class="target-note">${esc(game.name)}</span>
-      </div>`),
-  );
 
   app.appendChild(
     wrapPanel(
@@ -2295,7 +2290,7 @@ function buildTurnTable(game) {
       <tr>
         <td class="rank-col"><span class="turn-num">${i + 1}</span></td>
         <td class="player-name">${name}</td>
-        <td><span class="cell-box"><input type="number" inputmode="numeric" class="cell-input${val === 0 ? " cell-zero" : ""}" value="${val}" />${drawnTag}</span></td>
+        <td><span class="cell-box"><input type="number" class="cell-input${val === 0 ? " cell-zero" : ""}" value="${val}" />${drawnTag}</span></td>
         <td class="total-cell"><span class="score-badge">${running[pid]}</span></td>
         <td class="rank-col"><button class="btn btn-danger btn-icon" data-delturn="${i}" title="Supprimer le tour"><i class="fa-regular fa-xmark"></i></button></td>
       </tr>`);
@@ -2376,9 +2371,11 @@ function buildTable(game, rankMap, w) {
       if (isFlip7Game) {
         // At rest the input shows only the entered points (with a "+15" badge
         // when Flip 7); focusing reveals the "10+15" expression so the bonus can
-        // be added or removed by typing — which toggles the badge live.
+        // be added or removed by typing — which toggles the badge live. type
+        // "text" with no inputmode keeps the full keyboard (so "+" stays
+        // reachable on mobile, without falling back to the "tel" keypad).
         const flip7 = !cell.bust && !!cell.flip7;
-        td.innerHTML = `<span class="cell-box"><input type="text" inputmode="numeric" class="cell-input${pts === 0 && !flip7 ? " cell-zero" : ""}" value="${esc(String(pts))}" />${flip7 ? '<span class="flip7-tag">+15</span>' : ""}</span>`;
+        td.innerHTML = `<span class="cell-box"><input type="text" class="cell-input${pts === 0 && !flip7 ? " cell-zero" : ""}" value="${esc(String(pts))}" />${flip7 ? '<span class="flip7-tag">+15</span>' : ""}</span>`;
         const input = td.querySelector("input");
         const box = td.querySelector(".cell-box");
         const setBadge = (on) => {
@@ -2431,12 +2428,11 @@ function buildTable(game, rankMap, w) {
         tr.appendChild(td);
         return;
       }
-      // Number games (Skyjo, Time's Up!): a plain editable number. Games that
-      // allow negatives (Skyjo) keep the classic number keyboard (no inputmode)
-      // so the "−" key stays reachable; others use the numeric pad.
-      const imode = def.negatives ? "" : ' inputmode="numeric"';
+      // Number games (Skyjo, Time's Up!): a plain editable number. No inputmode
+      // so the classic number keyboard is used (keeps the "−" key reachable for
+      // Skyjo negatives).
       td.innerHTML = `
-        <span class="cell-box"><input type="number"${imode} class="cell-input${pts === 0 ? " cell-zero" : ""}" value="${pts}" /></span>`;
+        <span class="cell-box"><input type="number" class="cell-input${pts === 0 ? " cell-zero" : ""}" value="${pts}" /></span>`;
       const input = td.querySelector("input");
       input.addEventListener("input", () => {
         input.classList.toggle("cell-zero", (Number(input.value) || 0) === 0);
@@ -2560,7 +2556,7 @@ function buildEntryRow(game, draft, p, onChange) {
       <span class="pname">${esc(p.name)}</span>
       <div class="entry-controls">
         <input type="number" inputmode="numeric" class="cell-input" placeholder="0" min="0" value="${d.bust ? "" : esc(d.points)}" ${d.bust ? "disabled" : ""} />
-        <button type="button" class="btn btn-ghost btn-sm flip7-btn ${d.flip7 ? "active" : ""}" ${d.bust ? "disabled" : ""}><i class="fa-regular fa-star"></i> Flip 7 (+${def.bonus})</button>
+        <button type="button" class="btn btn-ghost btn-sm flip7-btn ${d.flip7 ? "active" : ""}" ${d.bust ? "disabled" : ""}>Flip 7</button>
         <button type="button" class="btn btn-ghost btn-sm bust-btn ${d.bust ? "active" : ""}">Éliminé</button>
       </div>
     </div>`);
@@ -3528,6 +3524,10 @@ const STAT_FILTERS = {
 };
 function computeStats(place, filter = "flip7") {
   const f = STAT_FILTERS[filter] || STAT_FILTERS.flip7;
+  // "Best" depends on the ruleset's score order: lowest is best for Skyjo
+  // (asc), highest for everyone else (desc). null means "no value yet".
+  const isBetter = (v, cur) =>
+    cur == null || (f.order === "asc" ? v < cur : v > cur);
   const games = gamesForPlace(place).filter(f.match);
   const map = {}; // key: lowercased trimmed name -> aggregate
   games.forEach((g) => {
@@ -3546,8 +3546,9 @@ function computeStats(place, filter = "flip7") {
           points: 0,
           wins: 0,
           elims: 0, // number of busted (eliminated) rounds across games
-          bestGame: 0, // highest single-game total
-          bestRound: 0, // highest single-round score
+          flip7s: 0, // number of Flip 7 bonuses scored across games
+          bestGame: null, // best single-game total (min for asc, max for desc)
+          bestRound: null, // best single-round score (min for asc, max for desc)
         };
       const agg = map[key];
       agg.games += 1;
@@ -3555,20 +3556,23 @@ function computeStats(place, filter = "flip7") {
         const teamId = teamOfSeat(idx);
         const total = teamTotal(g, teamId);
         agg.points += total;
-        if (total > agg.bestGame) agg.bestGame = total;
+        if (g.rounds.length && isBetter(total, agg.bestGame))
+          agg.bestGame = total;
         g.rounds.forEach((r) => {
           const rv = Number(r.scores && r.scores[teamId]) || 0;
-          if (rv > agg.bestRound) agg.bestRound = rv;
+          if (isBetter(rv, agg.bestRound)) agg.bestRound = rv;
         });
       } else {
         const total = playerTotal(g, p.id);
         agg.points += total;
-        if (total > agg.bestGame) agg.bestGame = total;
+        if (g.rounds.length && isBetter(total, agg.bestGame))
+          agg.bestGame = total;
         g.rounds.forEach((r) => {
           const cell = r.scores[p.id];
           if (cell && cell.bust) agg.elims += 1;
+          if (cell && cell.flip7 && !cell.bust) agg.flip7s += 1;
           const rv = def.cellValue(cell);
-          if (rv > agg.bestRound) agg.bestRound = rv;
+          if (isBetter(rv, agg.bestRound)) agg.bestRound = rv;
         });
       }
     });
@@ -3622,25 +3626,55 @@ const STAT_METRICS = {
     sort: () => (a, b) => b.elims - a.elims || b.games - a.games,
     tie: (a, b) => a.elims === b.elims && a.games === b.games,
   },
+  flip7s: {
+    label: "Nombre de Flip 7",
+    cols: () => [{ head: "Parties", get: (s) => s.games }],
+    valueHead: "Flip 7",
+    value: (s) => s.flip7s,
+    sort: () => (a, b) => b.flip7s - a.flip7s || b.games - a.games,
+    tie: (a, b) => a.flip7s === b.flip7s && a.games === b.games,
+  },
   bestGame: {
-    label: "Le plus gros score",
+    label: "Meilleure partie",
     cols: () => [{ head: "Parties", get: (s) => s.games }],
     valueHead: "Meilleur total",
-    value: (s) => s.bestGame,
-    sort: () => (a, b) => b.bestGame - a.bestGame || b.games - a.games,
+    value: (s) => s.bestGame ?? 0,
+    // Best = lowest for asc (Skyjo), highest otherwise. null sorts last.
+    sort: (order) => (a, b) =>
+      (order === "asc"
+        ? (a.bestGame ?? Infinity) - (b.bestGame ?? Infinity)
+        : (b.bestGame ?? -Infinity) - (a.bestGame ?? -Infinity)) ||
+      b.games - a.games,
     tie: (a, b) => a.bestGame === b.bestGame,
   },
   bestRound: {
-    label: "La plus grosse manche",
+    // A "round" is a "tour" in Qwirkle, a "manche" elsewhere.
+    label: (mode) => (mode === "qwirkle" ? "Meilleur tour" : "Meilleure manche"),
     cols: () => [{ head: "Parties", get: (s) => s.games }],
-    valueHead: "Meilleure manche",
-    value: (s) => s.bestRound,
-    sort: () => (a, b) => b.bestRound - a.bestRound || b.games - a.games,
+    valueHead: (mode) =>
+      mode === "qwirkle" ? "Meilleur tour" : "Meilleure manche",
+    value: (s) => s.bestRound ?? 0,
+    sort: (order) => (a, b) =>
+      (order === "asc"
+        ? (a.bestRound ?? Infinity) - (b.bestRound ?? Infinity)
+        : (b.bestRound ?? -Infinity) - (a.bestRound ?? -Infinity)) ||
+      b.games - a.games,
     tie: (a, b) => a.bestRound === b.bestRound,
   },
 };
-// Metric selector only applies to the Flip 7 family (busts/Flip 7 bonuses).
+// Which metrics each version offers in the selector (ranking is always first).
 const FLIP7_VERSIONS = new Set(["flip7", "classic", "vengeance"]);
+function metricsForVersion(mode) {
+  if (FLIP7_VERSIONS.has(mode))
+    return ["ranking", "elims", "flip7s", "bestGame", "bestRound"];
+  if (mode === "skyjo" || mode === "qwirkle")
+    return ["ranking", "bestGame", "bestRound"];
+  return ["ranking"];
+}
+// Resolve a metric label/valueHead that may be a string or a mode-aware fn.
+function metricText(x, mode) {
+  return typeof x === "function" ? x(mode) : x;
+}
 
 function renderStats() {
   app.innerHTML = "";
@@ -3673,24 +3707,17 @@ function renderStats() {
       versionBtns.forEach((x) =>
         x.classList.toggle("active", x.dataset.v === statMode),
       );
-      if (!FLIP7_VERSIONS.has(statMode)) statMetric = "ranking";
       syncMetricControls();
       draw();
     }),
   );
   app.appendChild(controls);
 
-  // Metric selector (Flip 7 only): Classement / Le plus éliminé / etc.
+  // Metric selector: options depend on the selected version (filled by
+  // syncMetricControls). Hidden when the version offers only the ranking.
   const metricControls = el(`
     <div class="stat-metric-filter" id="metricFilter">
-      <select class="stat-metric-select">
-        ${Object.entries(STAT_METRICS)
-          .map(
-            ([key, m]) =>
-              `<option value="${key}" ${key === statMetric ? "selected" : ""}>${m.label}</option>`,
-          )
-          .join("")}
-      </select>
+      <select class="stat-metric-select"></select>
     </div>`);
   const metricSelect = metricControls.querySelector("select");
   metricSelect.addEventListener("change", () => {
@@ -3700,7 +3727,15 @@ function renderStats() {
   app.appendChild(metricControls);
 
   function syncMetricControls() {
-    metricControls.style.display = FLIP7_VERSIONS.has(statMode) ? "" : "none";
+    const keys = metricsForVersion(statMode);
+    if (!keys.includes(statMetric)) statMetric = "ranking";
+    metricSelect.innerHTML = keys
+      .map(
+        (key) =>
+          `<option value="${key}" ${key === statMetric ? "selected" : ""}>${metricText(STAT_METRICS[key].label, statMode)}</option>`,
+      )
+      .join("");
+    metricControls.style.display = keys.length > 1 ? "" : "none";
     metricSelect.value = statMetric;
   }
 
@@ -3735,7 +3770,7 @@ function renderStats() {
           <th class="rank-col">#</th>
           <th class="player-name">${unitLabel(statMode)}</th>
           ${cols.map((c) => `<th>${c.head}</th>`).join("")}
-          <th>${metric.valueHead}</th>
+          <th>${metricText(metric.valueHead, statMode)}</th>
         </tr></thead>
       </table>`);
     const tbody = el(`<tbody></tbody>`);
