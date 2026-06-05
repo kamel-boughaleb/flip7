@@ -4,7 +4,7 @@ import { el, esc, toast } from "../util.js";
 import { getGame, upsertGame } from "../store.js";
 import { defFor } from "../rules.js";
 import { currentPlayer, turnDraftHasData } from "../scoring.js";
-import { go } from "../nav.js";
+import { go, currentRoute } from "../nav.js";
 import { endGamePrompt } from "../actions.js";
 import { openYamsDialog } from "./yams.js";
 

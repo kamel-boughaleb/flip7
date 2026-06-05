@@ -11,7 +11,7 @@ import {
   yamsUpperSum,
 } from "../rules.js";
 import { currentPlayer } from "../scoring.js";
-import { go } from "../nav.js";
+import { go, currentRoute } from "../nav.js";
 
 export function openYamsDialog(game) {
   const cur = currentPlayer(game);

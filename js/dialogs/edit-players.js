@@ -1,15 +1,23 @@
 /* Edit-players dialog: rename/reorder a game's roster (and switch its type
    when no round has been played yet). */
 import { el, esc, toast, firstDuplicateName } from "../util.js";
-import { uid, getGame, upsertGame, placePlayerNames } from "../store.js";
+import {
+  uid,
+  getGame,
+  upsertGame,
+  placePlayerNames,
+  getSelectedPlace,
+} from "../store.js";
 import {
   MODES,
+  DEFAULT_MODE,
   defFor,
   rulesetOf,
   unitOf,
   unitKeyOf,
   modeTabsHTML,
 } from "../rules.js";
+import { winner } from "../scoring.js";
 import { go } from "../nav.js";
 import { renderPlayerRows } from "./player-rows.js";
 

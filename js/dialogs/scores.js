@@ -5,7 +5,7 @@ import { getGame, upsertGame } from "../store.js";
 import { defFor } from "../rules.js";
 import { winner } from "../scoring.js";
 import { celebrateIfNewWinner } from "./celebrate.js";
-import { go } from "../nav.js";
+import { go, currentRoute } from "../nav.js";
 
 function draftHasData(d) {
   return d && ((d.points !== "" && d.points != null) || d.flip7 || d.bust);
