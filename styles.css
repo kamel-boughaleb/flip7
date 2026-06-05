@@ -2727,3 +2727,10 @@ body:has(.overlay) {
   border-top: 2px solid var(--teal-light);
   font-weight: 900;
 }
+
+/* Custom elements default to inline; make the block-level ones behave. */
+app-logo,
+app-stats-table,
+app-score-summary {
+  display: block;
+}

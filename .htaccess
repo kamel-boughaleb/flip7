@@ -1,0 +1,13 @@
+# Path-based routing (History API) — Apache/MAMP production.
+# Serve real files/directories as-is; route everything else to index.html so
+# deep links like /[lieu]/stats or /[lieu]/[id]/details work on refresh/share.
+# No RewriteBase: the relative "index.html" target resolves against the folder
+# that holds this .htaccess — so the same file works at the domain root (prod)
+# and in a subfolder like /flip7/ (MAMP), no per-environment edit needed.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+  RewriteRule ^ index.html [L]
+</IfModule>
