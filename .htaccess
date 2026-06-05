@@ -11,3 +11,9 @@
   RewriteRule ^ - [L]
   RewriteRule ^ index.html [L]
 </IfModule>
+
+# Fallback when mod_rewrite is unavailable but .htaccess is honored: serve the
+# SPA entry for any unknown path. Same override class (FileInfo) as the rewrite
+# above, so it never triggers a 500 the rewrite wouldn't. The response status is
+# 404 but the app boots and routes from location.pathname.
+ErrorDocument 404 /index.html
