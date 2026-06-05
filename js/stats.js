@@ -126,21 +126,21 @@ const STAT_METRICS = {
     valueHead: "Victoires",
     value: (s) => s.wins,
     sort: () => (a, b) => b.wins - a.wins || b.games - a.games,
-    tie: (a, b) => a.wins === b.wins && a.games === b.games,
+    tie: (a, b) => a.wins === b.wins,
   },
   winrate: {
     label: "Taux de victoire",
     valueHead: "Taux",
     value: (s) => `${winRate(s)} %`,
     sort: () => (a, b) => winRate(b) - winRate(a) || b.games - a.games,
-    tie: (a, b) => winRate(a) === winRate(b) && a.games === b.games,
+    tie: (a, b) => winRate(a) === winRate(b),
   },
   games: {
     label: "Nombre de parties",
     valueHead: "Parties",
     value: (s) => s.games,
     sort: () => (a, b) => b.games - a.games || b.wins - a.wins,
-    tie: (a, b) => a.games === b.games && a.wins === b.wins,
+    tie: (a, b) => a.games === b.games,
   },
   points: {
     label: "Score total",
@@ -150,7 +150,7 @@ const STAT_METRICS = {
     sort: (order) => (a, b) =>
       (order === "asc" ? a.points - b.points : b.points - a.points) ||
       b.games - a.games,
-    tie: (a, b) => a.points === b.points && a.games === b.games,
+    tie: (a, b) => a.points === b.points,
   },
   average: {
     label: "Moyenne par partie",
@@ -167,14 +167,14 @@ const STAT_METRICS = {
     valueHead: "Éliminations",
     value: (s) => s.elims,
     sort: () => (a, b) => b.elims - a.elims || b.games - a.games,
-    tie: (a, b) => a.elims === b.elims && a.games === b.games,
+    tie: (a, b) => a.elims === b.elims,
   },
   flip7s: {
     label: "Nombre de Flip 7",
     valueHead: "Flip 7",
     value: (s) => s.flip7s,
     sort: () => (a, b) => b.flip7s - a.flip7s || b.games - a.games,
-    tie: (a, b) => a.flip7s === b.flip7s && a.games === b.games,
+    tie: (a, b) => a.flip7s === b.flip7s,
   },
   bestGame: {
     label: "Meilleure partie",
