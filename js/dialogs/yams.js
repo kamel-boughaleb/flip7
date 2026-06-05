@@ -10,8 +10,9 @@ import {
   yamsFilled,
   yamsUpperSum,
 } from "../rules.js";
-import { currentPlayer } from "../scoring.js";
+import { currentPlayer, winner } from "../scoring.js";
 import { go, currentRoute } from "../nav.js";
+import { celebrateIfNewWinner } from "./celebrate.js";
 
 export function openYamsDialog(game) {
   const cur = currentPlayer(game);
@@ -175,6 +176,7 @@ export function openYamsDialog(game) {
     if (!selKey) return toast("Choisissez une mission");
     const points = effPoints();
     const g = getGame(game.id);
+    const before = (winner(g) || {}).id || null; // winner before this mission
     g.rounds.push({
       scores: { [cur.id]: { category: selKey, points } },
       at: Date.now(),
@@ -185,6 +187,8 @@ export function openYamsDialog(game) {
     const cat = yamsCat(selKey);
     toast(`${cur.name} — ${cat.label} : ${points} pts`);
     go("game", { id: game.id });
+    // The last filled cell can complete the card → celebrate the new winner.
+    celebrateIfNewWinner(before, g);
   };
   modal.querySelector("#saveYams").addEventListener("click", save);
 
