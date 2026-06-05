@@ -4,6 +4,7 @@
    the rest of the app only reads it through the exported accessors. */
 import { toast } from "./util.js";
 import { winner } from "./scoring.js";
+import { unitKeyOf } from "./rules.js";
 
 // Single shared store for every game type (legacy key kept for back-compat).
 const STORE_KEY = "flip7_games";
@@ -193,8 +194,23 @@ function gamesForPlace(place) {
     .sort((a, b) => (winner(a) ? 1 : 0) - (winner(b) ? 1 : 0));
 }
 
+// Distinct player (or team) names seen at a place, for entry autocompletion.
+function placePlayerNames(place, unit = "joueur") {
+  const seen = new Map(); // lowercased -> original casing
+  gamesForPlace(place)
+    .filter((g) => unitKeyOf(g.mode) === unit)
+    .forEach((g) =>
+      g.players.forEach((p) => {
+        const n = (p.name || "").trim();
+        if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+      }),
+    );
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, "fr"));
+}
+
 export {
   db,
+  placePlayerNames,
   LOADED_PLACE,
   fetchPlaces,
   fetchGames,
