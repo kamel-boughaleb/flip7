@@ -89,3 +89,16 @@ export function confettiMarkup(n = 14) {
   }
   return `<div class="confetti">${pieces}</div>`;
 }
+
+// First name that appears twice (case-insensitive, trimmed), or null.
+export function firstDuplicateName(names) {
+  const seen = new Set();
+  for (const n of names) {
+    const key = (n || "").trim().toLowerCase();
+    if (!key) continue;
+    if (seen.has(key)) return n.trim();
+    seen.add(key);
+  }
+  return null;
+}
+
