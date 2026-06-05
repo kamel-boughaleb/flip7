@@ -1651,7 +1651,11 @@ function renderHome() {
     const ws = winners(g);
     const w = ws[0] || null;
     const ongoing = !g.cancelled && !w;
-    const names = g.players.map((p) => p.name).join(", ");
+    const playerCount = g.players.length;
+    const u = unitOf(g.mode);
+    const playersNote = playerCount
+      ? `${playerCount} ${(playerCount === 1 ? u.one : u.many).toLowerCase()}`
+      : "Aucun joueur";
     let roundsNote = "";
     if (!ongoing) {
       roundsNote = ` · ${roundCountLabel(g, g.rounds.length)}`;
@@ -1670,7 +1674,7 @@ function renderHome() {
       <div class="game-card ${g.cancelled ? "cancelled" : w ? "done" : "ongoing"}">
         <div class="meta">
           <div class="name"><span class="name-text">${esc(g.name)}</span> <span class="badge badge-sm ${modeClass(g.mode)}">${esc(modeLabel(g.mode))}</span></div>
-          <div class="sub">${esc(names || "Aucun joueur")}${roundsNote}</div>
+          <div class="sub">${esc(playersNote)}${roundsNote}</div>
         </div>
         ${statusBadge}
       </div>`);
@@ -4153,25 +4157,71 @@ function computeStats(place, filter = "flip7") {
 
 // Stat "metrics" selectable for Flip 7: which table to show. Each defines its
 // value column, sort order, and the tie test used for shared ranks.
+// Label for the "best round" metric, named after each game's round unit.
+function bestRoundLabel(mode) {
+  return mode === "qwirkle"
+    ? "Meilleur tour"
+    : mode === "yams"
+      ? "Meilleure case"
+      : mode === "contree"
+        ? "Meilleure donne"
+        : "Meilleure manche";
+}
+// Average score per game, rounded to a whole number (0 if no game).
+function avgScore(s) {
+  if (!s.games) return 0;
+  return Math.round(s.points / s.games);
+}
+// Win ratio as a whole-number percentage of games played (0 if no game).
+function winRate(s) {
+  if (!s.games) return 0;
+  return Math.round((s.wins / s.games) * 100);
+}
+
 const STAT_METRICS = {
-  ranking: {
-    label: "Classement",
-    cols: (mode) => [
-      { head: "Parties", get: (s) => s.games },
-      { head: "Points", get: (s) => s.points },
-    ],
+  wins: {
+    label: "Nombre de victoires",
     valueHead: "Victoires",
     value: (s) => s.wins,
+    sort: () => (a, b) => b.wins - a.wins || b.games - a.games,
+    tie: (a, b) => a.wins === b.wins && a.games === b.games,
+  },
+  winrate: {
+    label: "Taux de victoire",
+    valueHead: "Taux",
+    value: (s) => `${winRate(s)} %`,
+    sort: () => (a, b) => winRate(b) - winRate(a) || b.games - a.games,
+    tie: (a, b) => winRate(a) === winRate(b) && a.games === b.games,
+  },
+  games: {
+    label: "Nombre de parties",
+    valueHead: "Parties",
+    value: (s) => s.games,
+    sort: () => (a, b) => b.games - a.games || b.wins - a.wins,
+    tie: (a, b) => a.games === b.games && a.wins === b.wins,
+  },
+  points: {
+    label: "Score total",
+    valueHead: "Points",
+    value: (s) => s.points,
+    // Higher is better, except Skyjo (asc) where fewer points is better.
     sort: (order) => (a, b) =>
-      b.wins - a.wins ||
       (order === "asc" ? a.points - b.points : b.points - a.points) ||
       b.games - a.games,
-    tie: (a, b) =>
-      a.wins === b.wins && a.points === b.points && a.games === b.games,
+    tie: (a, b) => a.points === b.points && a.games === b.games,
+  },
+  average: {
+    label: "Moyenne par partie",
+    valueHead: "Moyenne",
+    value: (s) => avgScore(s),
+    sort: (order) => (a, b) =>
+      (order === "asc"
+        ? avgScore(a) - avgScore(b)
+        : avgScore(b) - avgScore(a)) || b.games - a.games,
+    tie: (a, b) => avgScore(a) === avgScore(b),
   },
   elims: {
     label: "Le plus éliminé",
-    cols: () => [{ head: "Parties", get: (s) => s.games }],
     valueHead: "Éliminations",
     value: (s) => s.elims,
     sort: () => (a, b) => b.elims - a.elims || b.games - a.games,
@@ -4179,7 +4229,6 @@ const STAT_METRICS = {
   },
   flip7s: {
     label: "Nombre de Flip 7",
-    cols: () => [{ head: "Parties", get: (s) => s.games }],
     valueHead: "Flip 7",
     value: (s) => s.flip7s,
     sort: () => (a, b) => b.flip7s - a.flip7s || b.games - a.games,
@@ -4187,7 +4236,6 @@ const STAT_METRICS = {
   },
   bestGame: {
     label: "Meilleure partie",
-    cols: () => [{ head: "Parties", get: (s) => s.games }],
     valueHead: "Meilleur total",
     value: (s) => s.bestGame ?? 0,
     // Best = lowest for asc (Skyjo), highest otherwise. null sorts last.
@@ -4199,20 +4247,10 @@ const STAT_METRICS = {
     tie: (a, b) => a.bestGame === b.bestGame,
   },
   bestRound: {
-    // A "round" is a "tour" in Qwirkle, a "manche" elsewhere.
-    label: (mode) =>
-      mode === "qwirkle"
-        ? "Meilleur tour"
-        : mode === "yams"
-          ? "Meilleure case"
-          : "Meilleure manche",
-    cols: () => [{ head: "Parties", get: (s) => s.games }],
-    valueHead: (mode) =>
-      mode === "qwirkle"
-        ? "Meilleur tour"
-        : mode === "yams"
-          ? "Meilleure case"
-          : "Meilleure manche",
+    // A "round" is a "tour" in Qwirkle, a "donne" in Contrée, a "case" in
+    // Yam's, a "manche" elsewhere.
+    label: (mode) => bestRoundLabel(mode),
+    valueHead: (mode) => bestRoundLabel(mode),
     value: (s) => s.bestRound ?? 0,
     sort: (order) => (a, b) =>
       (order === "asc"
@@ -4222,14 +4260,16 @@ const STAT_METRICS = {
     tie: (a, b) => a.bestRound === b.bestRound,
   },
 };
-// Which metrics each version offers in the selector (ranking is always first).
+// Which metrics each version offers in the selector (wins is the default/first).
 const FLIP7_VERSIONS = new Set(["flip7", "classic", "vengeance"]);
 function metricsForVersion(mode) {
+  const base = ["wins", "winrate", "games", "points", "average"];
   if (FLIP7_VERSIONS.has(mode))
-    return ["ranking", "elims", "flip7s", "bestGame", "bestRound"];
-  if (mode === "skyjo" || mode === "qwirkle" || mode === "yams")
-    return ["ranking", "bestGame", "bestRound"];
-  return ["ranking"];
+    return [...base, "elims", "flip7s", "bestGame", "bestRound"];
+  // Games with a meaningful single-game / single-round high score.
+  if (["skyjo", "qwirkle", "yams", "timesup", "contree"].includes(mode))
+    return [...base, "bestGame", "bestRound"];
+  return base;
 }
 // Resolve a metric label/valueHead that may be a string or a mode-aware fn.
 function metricText(x, mode) {
@@ -4256,7 +4296,7 @@ function renderStats() {
     { key: "yams", label: "Yam's" },
   ];
   let statMode = "flip7";
-  let statMetric = "ranking";
+  let statMetric = "wins";
   const controls = el(`
     <div class="date-filter" id="versionFilter">
       ${VERSIONS.map((v) => `<button type="button" data-v="${v.key}" class="${v.key === statMode ? "active" : ""}">${v.label}</button>`).join("")}
@@ -4275,7 +4315,7 @@ function renderStats() {
   app.appendChild(controls);
 
   // Metric selector: options depend on the selected version (filled by
-  // syncMetricControls). Hidden when the version offers only the ranking.
+  // syncMetricControls). Hidden when the version offers a single metric.
   const metricControls = el(`
     <div class="stat-metric-filter" id="metricFilter">
       <select class="stat-metric-select"></select>
@@ -4289,7 +4329,7 @@ function renderStats() {
 
   function syncMetricControls() {
     const keys = metricsForVersion(statMode);
-    if (!keys.includes(statMetric)) statMetric = "ranking";
+    if (!keys.includes(statMetric)) statMetric = "wins";
     metricSelect.innerHTML = keys
       .map(
         (key) =>
@@ -4306,7 +4346,7 @@ function renderStats() {
   function draw() {
     content.innerHTML = "";
     const f = STAT_FILTERS[statMode] || STAT_FILTERS.flip7;
-    const metric = STAT_METRICS[statMetric] || STAT_METRICS.ranking;
+    const metric = STAT_METRICS[statMetric] || STAT_METRICS.wins;
     const stats = computeStats(place, statMode)
       .slice()
       .sort(metric.sort(f.order));
@@ -4323,14 +4363,12 @@ function renderStats() {
       return;
     }
 
-    const cols = metric.cols(statMode);
     const wrap = el(`<div class="table-wrap"></div>`);
     const table = el(`
       <table class="score stats-table">
         <thead><tr>
           <th class="rank-col">#</th>
           <th class="player-name">${unitLabel(statMode)}</th>
-          ${cols.map((c) => `<th>${c.head}</th>`).join("")}
           <th>${metricText(metric.valueHead, statMode)}</th>
         </tr></thead>
       </table>`);
@@ -4343,7 +4381,6 @@ function renderStats() {
         <tr class="${place === 1 ? "winner-row" : ""}">
           <td class="rank-col"><span class="badge ${rankClass}">${label}</span></td>
           <td class="player-name">${esc(s.name)}</td>
-          ${cols.map((c) => `<td>${c.get(s)}</td>`).join("")}
           <td class="total-cell"><span class="score-badge ${rankClass}">${metric.value(s)}</span></td>
         </tr>`);
       tbody.appendChild(tr);
