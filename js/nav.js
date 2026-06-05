@@ -1,0 +1,61 @@
+/* ---------- nav ----------
+   Navigation shell: owns the current route + History API plumbing, decoupled
+   from rendering. The app registers a render callback via onRender(); screens
+   and components navigate with go() without importing back into app.js. */
+import {
+  parsePath,
+  buildPath,
+  slugify,
+  NO_PLACE_SLUG,
+} from "./router.js";
+import {
+  getSelectedPlace,
+  setSelectedPlace,
+  fetchGames,
+  LOADED_PLACE,
+  allPlaces,
+} from "./store.js";
+
+let route = { name: "place" };
+let renderCb = () => {};
+
+export function currentRoute() {
+  return route;
+}
+export function onRender(cb) {
+  renderCb = cb;
+}
+
+// Resolve a URL place-slug back to a real place name known to the app. Matches
+// known places by slug; falls back to a best-effort de-slug for direct links.
+export function placeFromSlug(slug) {
+  if (slug == null) return null;
+  if (slug === NO_PLACE_SLUG) return ""; // the "Sans lieu" bucket
+  const hit = allPlaces().find((pl) => slugify(pl) === slug);
+  return hit !== undefined ? hit : slug.replace(/-/g, " ");
+}
+
+export function go(name, params = {}) {
+  route = { name, ...params };
+  const place = name === "place" ? null : getSelectedPlace();
+  const path = buildPath({ name, place, id: params.id });
+  if (path !== location.pathname) history.pushState(null, "", path);
+  renderCb();
+  window.scrollTo(0, 0);
+}
+
+// Apply the route described by the current URL (back/forward, deep link).
+export async function applyLocation() {
+  const r = parsePath(location.pathname);
+  if (r.name !== "place") {
+    const place = placeFromSlug(r.placeSlug);
+    setSelectedPlace(place);
+    // The URL may point to another place: reload its games before rendering.
+    if (place !== LOADED_PLACE) await fetchGames(place);
+  }
+  route = { name: r.name, ...(r.id ? { id: r.id } : {}) };
+  renderCb();
+  window.scrollTo(0, 0);
+}
+
+window.addEventListener("popstate", applyLocation);

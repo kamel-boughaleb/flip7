@@ -68,12 +68,8 @@ import {
   turnDraftHasData,
   contreeBidHTML,
 } from "./js/scoring.js";
-import {
-  NO_PLACE_SLUG,
-  slugify,
-  parsePath,
-  buildPath,
-} from "./js/router.js";
+import { parsePath } from "./js/router.js";
+import { go, applyLocation, currentRoute, onRender } from "./js/nav.js";
 import {
   db,
   LOADED_PLACE,
@@ -177,48 +173,12 @@ async function endGamePrompt(game) {
 }
 
 
-/* ---------- router ---------- */
+/* ---------- shell: render dispatch + polling ---------- */
 const app = document.getElementById("app");
-let route = { name: "place" };
 let homeFilter = "today"; // games list date filter: "today" | "week" | "month" | "all"
 let pollTimer = null;
 let durationTimer = null; // ticks the live game-duration chip every second
 let statsRedraw = null; // redraws the stats table in place (filters preserved)
-
-// Resolve a URL place-slug back to a real place name known to the app.
-// Matches against known places by slug; falls back to a best-effort de-slug for
-// direct links to a place the cache doesn't know yet.
-function placeFromSlug(slug) {
-  if (slug == null) return null;
-  if (slug === NO_PLACE_SLUG) return ""; // the "Sans lieu" bucket
-  const hit = allPlaces().find((pl) => slugify(pl) === slug);
-  return hit !== undefined ? hit : slug.replace(/-/g, " ");
-}
-
-function go(name, params = {}) {
-  route = { name, ...params };
-  const place = name === "place" ? null : getSelectedPlace();
-  const path = buildPath({ name, place, id: params.id });
-  if (path !== location.pathname) history.pushState(null, "", path);
-  render();
-  window.scrollTo(0, 0); // always start a new screen at the top
-}
-
-// Apply the route described by the current URL (back/forward, deep link).
-async function applyLocation() {
-  const r = parsePath(location.pathname);
-  if (r.name !== "place") {
-    const place = placeFromSlug(r.placeSlug);
-    setSelectedPlace(place);
-    // The URL may point to another place: reload its games before rendering.
-    if (place !== LOADED_PLACE) await fetchGames(place);
-  }
-  route = { name: r.name, ...(r.id ? { id: r.id } : {}) };
-  render();
-  window.scrollTo(0, 0);
-}
-
-window.addEventListener("popstate", applyLocation);
 
 document.getElementById("homeBtn").addEventListener("click", () => go("home"));
 document
@@ -233,7 +193,7 @@ function updatePlaceBtn() {
   const btn = document.getElementById("placeBtn");
   if (!btn) return;
   const place = getSelectedPlace();
-  if (place !== null && route.name !== "place") {
+  if (place !== null && currentRoute().name !== "place") {
     btn.innerHTML = `<i class="fa-regular fa-location-dot"></i> ${esc(placeLabel(place))}`;
     btn.hidden = false;
   } else {
@@ -246,43 +206,45 @@ function updatePlaceBtn() {
 function updateTitle(place) {
   const base = "Compteur de score";
   document.title =
-    place !== null && route.name !== "place"
+    place !== null && currentRoute().name !== "place"
       ? `${placeLabel(place)} | ${base}`
       : base;
 }
 
 const KNOWN_ROUTES = ["place", "home", "stats", "entry", "game", "details"];
 
+// Render callback for the nav shell: mount the screen for the current route.
 function render() {
   stopPolling();
   stopDurationTimer();
-  // Unknown / stale route names fall back to home (keeps route.name coherent).
-  if (!KNOWN_ROUTES.includes(route.name)) route = { name: "home" };
+  const r = currentRoute();
+  const name = KNOWN_ROUTES.includes(r.name) ? r.name : "home";
   updatePlaceBtn();
-  if (route.name === "place") return renderPlace();
-  if (route.name === "home") {
+  if (name === "place") return renderPlace();
+  if (name === "home") {
     renderHome();
     startHomePolling(); // live-refresh the games list every 2s
     return;
   }
-  if (route.name === "stats") {
+  if (name === "stats") {
     renderStats();
     startStatsPolling(); // live-refresh the stats table every 2s
     return;
   }
-  if (route.name === "entry") return renderEntry(route.id);
-  if (route.name === "game") {
-    renderGame(route.id);
-    startPolling(route.id); // live-refresh the board every 2s
+  if (name === "entry") return renderEntry(r.id);
+  if (name === "game") {
+    renderGame(r.id);
+    startPolling(r.id); // live-refresh the board every 2s
     return;
   }
-  if (route.name === "details") {
-    renderDetails(route.id);
-    startPolling(route.id);
+  if (name === "details") {
+    renderDetails(r.id);
+    startPolling(r.id);
     return;
   }
   renderHome();
 }
+onRender(render); // the nav shell calls this on every route change
 
 function stopPolling() {
   if (pollTimer) {
@@ -302,13 +264,13 @@ function startHomePolling() {
   stopPolling();
   if (!db) return; // nothing to sync from in local mode
   pollTimer = setInterval(async () => {
-    if (route.name !== "home") return stopPolling();
+    if (currentRoute().name !== "home") return stopPolling();
     // don't disrupt an open dialog (e.g. delete confirmation)
     if (document.querySelector("#modal-root .overlay")) return;
     const place = getSelectedPlace();
     const before = JSON.stringify(gamesForPlace(place));
     await fetchGames();
-    if (route.name !== "home") return;
+    if (currentRoute().name !== "home") return;
     if (JSON.stringify(gamesForPlace(place)) !== before) renderHome();
   }, 2000);
 }
@@ -318,12 +280,12 @@ function startStatsPolling() {
   stopPolling();
   if (!db) return; // nothing to sync from in local mode
   pollTimer = setInterval(async () => {
-    if (route.name !== "stats") return stopPolling();
+    if (currentRoute().name !== "stats") return stopPolling();
     if (document.querySelector("#modal-root .overlay")) return;
     const place = getSelectedPlace();
     const before = JSON.stringify(gamesForPlace(place));
     await fetchGames();
-    if (route.name !== "stats") return;
+    if (currentRoute().name !== "stats") return;
     if (JSON.stringify(gamesForPlace(place)) !== before && statsRedraw)
       statsRedraw();
   }, 2000);
@@ -331,18 +293,18 @@ function startStatsPolling() {
 function startPolling(id) {
   stopPolling();
   if (!db) return; // nothing to sync from in local mode
-  const onScoreScreen = () => route.name === "game" || route.name === "details";
+  const onScoreScreen = () => currentRoute().name === "game" || currentRoute().name === "details";
   pollTimer = setInterval(async () => {
-    if (!onScoreScreen() || route.id !== id) return stopPolling();
+    if (!onScoreScreen() || currentRoute().id !== id) return stopPolling();
     // don't disrupt an in-progress edit on the details screen
     const ae = document.activeElement;
     if (ae && ae.classList && ae.classList.contains("cell-input")) return;
     const before = JSON.stringify(getGame(id) || null);
     await fetchGames();
-    if (!onScoreScreen() || route.id !== id) return;
+    if (!onScoreScreen() || currentRoute().id !== id) return;
     const after = JSON.stringify(getGame(id) || null);
     if (after !== before) {
-      route.name === "details" ? renderDetails(id) : renderGame(id);
+      currentRoute().name === "details" ? renderDetails(id) : renderGame(id);
     }
   }, 2000);
 }
@@ -519,8 +481,8 @@ let rulesTab = "classic";
 // Rules shown in a dialog (opened from the top-bar book button).
 function openRulesDialog() {
   // When viewing a game, default the rules to that game's mode.
-  if (["game", "details", "entry"].includes(route.name) && route.id) {
-    const g = getGame(route.id);
+  if (["game", "details", "entry"].includes(currentRoute().name) && currentRoute().id) {
+    const g = getGame(currentRoute().id);
     if (g && MODES[g.mode]) rulesTab = g.mode;
   }
   const root = document.getElementById("modal-root");
@@ -1217,7 +1179,7 @@ function renderGame(id) {
     const valEl = head.querySelector("#durationChip .dur-val");
     stopDurationTimer();
     durationTimer = setInterval(() => {
-      if (route.name !== "game" || route.id !== id) return stopDurationTimer();
+      if (currentRoute().name !== "game" || currentRoute().id !== id) return stopDurationTimer();
       const g = getGame(id);
       if (!g || winner(g)) return stopDurationTimer();
       if (valEl && valEl.isConnected) valEl.textContent = fmtDuration(gameDuration(g));
@@ -1525,7 +1487,7 @@ function openScoresDialog(game) {
     clearTimeout(saveTimer);
     writeDraft();
     overlay.remove();
-    if (route.name === "game" && route.id === game.id) go("game", { id: game.id });
+    if (currentRoute().name === "game" && currentRoute().id === game.id) go("game", { id: game.id });
   };
   modal
     .querySelector("[data-act=close]")
@@ -1694,7 +1656,7 @@ function openTurnDialog(game) {
     clearTimeout(saveTimer);
     writeDraft();
     overlay.remove();
-    if (route.name === "game" && route.id === game.id)
+    if (currentRoute().name === "game" && currentRoute().id === game.id)
       go("game", { id: game.id });
   };
   modal
@@ -1878,7 +1840,7 @@ function openYamsDialog(game) {
   const closeKeepingDraft = () => {
     writeDraft();
     overlay.remove();
-    if (route.name === "game" && route.id === game.id)
+    if (currentRoute().name === "game" && currentRoute().id === game.id)
       go("game", { id: game.id });
   };
   modal
