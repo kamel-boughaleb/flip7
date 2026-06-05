@@ -1,13 +1,8 @@
 /* ---------- nav ----------
-   Navigation shell: owns the current route + History API plumbing, decoupled
-   from rendering. The app registers a render callback via onRender(); screens
-   and components navigate with go() without importing back into app.js. */
-import {
-  parsePath,
-  buildPath,
-  slugify,
-  NO_PLACE_SLUG,
-} from "./router.js";
+   Navigation shell: owns the current route + hash plumbing, decoupled from
+   rendering. The app registers a render callback via onRender(); screens and
+   components navigate with go() without importing back into app.js. */
+import { parsePath, buildPath, slugify, NO_PLACE_SLUG } from "./router.js";
 import {
   getSelectedPlace,
   setSelectedPlace,
@@ -18,12 +13,18 @@ import {
 
 let route = { name: "place" };
 let renderCb = () => {};
+let lastHash = null; // the hash we set ourselves (to ignore our own hashchange)
 
 export function currentRoute() {
   return route;
 }
 export function onRender(cb) {
   renderCb = cb;
+}
+
+// The route-path encoded in the current URL (the hash, minus the leading "#").
+export function currentHashPath() {
+  return location.hash.replace(/^#/, "") || "/";
 }
 
 // Resolve a URL place-slug back to a real place name known to the app. Matches
@@ -38,15 +39,17 @@ export function placeFromSlug(slug) {
 export function go(name, params = {}) {
   route = { name, ...params };
   const place = name === "place" ? null : getSelectedPlace();
-  const path = buildPath({ name, place, id: params.id });
-  if (path !== location.pathname) history.pushState(null, "", path);
+  const hash = "#" + buildPath({ name, place, id: params.id });
+  lastHash = hash;
+  if (location.hash !== hash) location.hash = hash; // fires hashchange (ignored)
   renderCb();
   window.scrollTo(0, 0);
 }
 
 // Apply the route described by the current URL (back/forward, deep link).
 export async function applyLocation() {
-  const r = parsePath(location.pathname);
+  const r = parsePath(currentHashPath());
+  lastHash = location.hash;
   if (r.name !== "place") {
     const place = placeFromSlug(r.placeSlug);
     setSelectedPlace(place);
@@ -58,4 +61,8 @@ export async function applyLocation() {
   window.scrollTo(0, 0);
 }
 
-window.addEventListener("popstate", applyLocation);
+// Back/forward or a manual hash edit: re-apply (skip our own go() changes).
+window.addEventListener("hashchange", () => {
+  if (location.hash === lastHash) return;
+  applyLocation();
+});

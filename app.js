@@ -70,7 +70,13 @@ import {
   contreeBidHTML,
 } from "./js/scoring.js";
 import { parsePath } from "./js/router.js";
-import { go, applyLocation, currentRoute, onRender } from "./js/nav.js";
+import {
+  go,
+  applyLocation,
+  currentRoute,
+  onRender,
+  currentHashPath,
+} from "./js/nav.js";
 import {
   db,
   LOADED_PLACE,
@@ -900,7 +906,7 @@ function renderStats() {
 (async function boot() {
   app.innerHTML = `<div class="panel-wrap"><div class="empty">Chargement…</div></div>`;
   await fetchPlaces();
-  const r = parsePath(location.pathname);
+  const r = parsePath(currentHashPath());
   if (r.name === "place" && getSelectedPlace() !== null) {
     // Landing on "/" with a remembered place: jump to its home (updates the URL).
     await fetchGames(getSelectedPlace());
