@@ -2,6 +2,20 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
+    <!-- DEPLOY BASE (path-based routing) — injecté AVANT tout asset pour que les
+         URLs relatives (CSS, modules, fonts) se résolvent quelle que soit la
+         profondeur de l'URL. Auto-détecté depuis le chemin : "/flip7/" si servi
+         depuis ce sous-dossier (MAMP local), sinon "/" (racine, prod). Les mêmes
+         fichiers marchent donc dans les deux environnements. Le routeur lit cette
+         base via document.baseURI. -->
+    <script>
+      (function () {
+        var base = /^\/flip7\//.test(location.pathname) ? "/flip7/" : "/";
+        var b = document.createElement("base");
+        b.href = base;
+        document.head.appendChild(b);
+      })();
+    </script>
     <meta
       http-equiv="Cache-Control"
       content="no-cache, no-store, must-revalidate"
@@ -46,23 +60,11 @@
 
     <div id="modal-root"></div>
 
-    <!-- Supabase client (shared data store) -->
+    <!-- Supabase client (shared data store) — global, before the app modules -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script>
-      // Always load fresh JS — unique URL per page load (config.js, then app.js, in order).
-      (function () {
-        var t = Date.now();
-        function load(src, next) {
-          var s = document.createElement("script");
-          s.src = src + "?t=" + t;
-          s.async = false; // keep execution order
-          if (next) s.onload = next;
-          document.body.appendChild(s);
-        }
-        load("config.js", function () {
-          load("app.js");
-        });
-      })();
-    </script>
+    <script src="config.js"></script>
+    <!-- App entry point as an ES module (statically imports ./js/*.js). Module
+         scripts are deferred, so they execute after config.js above. -->
+    <script type="module" src="app.js"></script>
   </body>
 </html>
