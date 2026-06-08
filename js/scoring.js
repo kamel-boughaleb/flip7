@@ -6,7 +6,7 @@ import {
   defFor,
   yamsComplete,
   yamsFilled,
-  YAMS_CATEGORIES,
+  yamsCategories,
   contreeSuit,
 } from "./rules.js";
 
@@ -133,7 +133,7 @@ function currentPlayer(game) {
   // a finished game by clearing a cell). Other turn-based games never skip.
   const done =
     defFor(game).entry === "yams"
-      ? (p) => yamsFilled(game, p.id).size >= YAMS_CATEGORIES.length
+      ? (p) => yamsFilled(game, p.id).size >= yamsCategories(game).length
       : () => false;
   for (let n = 0; n < order.length; n++) {
     const cand = order[(start + n) % order.length];

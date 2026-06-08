@@ -32,6 +32,13 @@ export function openEditPlayersDialog(game) {
   // A finished or cancelled game keeps its roster fixed — no add/remove.
   const locked = !!winner(game);
   let mode = MODES[game.mode] ? game.mode : DEFAULT_MODE;
+  let yamsChance = !!game.yamsChance; // Yam's-only option: the Chance case
+  // Once Chance has been scored by anyone, it can't be turned off (doing so
+  // would discard real scores) — the toggle stays locked on.
+  const chancePlayed = game.rounds.some((r) => {
+    const cell = Object.values(r.scores)[0];
+    return cell && cell.category === "chance";
+  });
 
   modal.innerHTML = `
     <div class="rules-dialog-head">
@@ -46,6 +53,16 @@ export function openEditPlayersDialog(game) {
       <div class="field" id="targetField" hidden>
         <label for="targetInput">Score cible</label>
         <input type="number" inputmode="numeric" class="cell-input target-input" id="targetInput" value="${esc(game.target != null ? String(game.target) : "")}" />
+      </div>
+      <div class="field" id="yamsOptField" hidden>
+        <label>Options</label>
+        <button type="button" class="setup-opt${yamsChance ? " active" : ""}${chancePlayed ? " disabled" : ""}" id="yamsChanceToggle" aria-pressed="${yamsChance}"${chancePlayed ? ' title="Déjà jouée — non désactivable"' : ""}>
+          <span class="setup-opt-main">
+            <span class="setup-opt-name">Chance</span>
+            <span class="setup-opt-desc muted">${chancePlayed ? "Déjà jouée : la case ne peut plus être retirée." : "Ajoute une 13ᵉ case : la somme des 5 dés."}</span>
+          </span>
+          <span class="setup-opt-switch" aria-hidden="true"></span>
+        </button>
       </div>
       <div class="field">
         <label id="playersLabel">Joueurs</label>
@@ -92,6 +109,8 @@ export function openEditPlayersDialog(game) {
   });
   const targetField = modal.querySelector("#targetField");
   const targetInput = modal.querySelector("#targetInput");
+  const yamsOptField = modal.querySelector("#yamsOptField");
+  const yamsChanceToggle = modal.querySelector("#yamsChanceToggle");
   const teamsHint = modal.querySelector("#teamsHint");
   // Contrée: A = seats 1 & 3, B = seats 2 & 4. Live preview under the roster.
   const updateTeamsHint = () => {
@@ -105,6 +124,7 @@ export function openEditPlayersDialog(game) {
   const applyRoster = () => {
     if (addBtn) addBtn.style.display = isTeams() ? "none" : "";
     targetField.hidden = !rulesetOf(mode).configurableTarget;
+    yamsOptField.hidden = mode !== "yams";
     updateTeamsHint();
   };
   const syncModeTabs = () =>
@@ -138,6 +158,13 @@ export function openEditPlayersDialog(game) {
       rowsEl.querySelector(".player-row:last-child input").focus();
     });
   }
+
+  yamsChanceToggle.addEventListener("click", () => {
+    if (chancePlayed) return; // locked on — can't discard played Chance cells
+    yamsChance = !yamsChance;
+    yamsChanceToggle.classList.toggle("active", yamsChance);
+    yamsChanceToggle.setAttribute("aria-pressed", String(yamsChance));
+  });
 
   const close = () => overlay.remove();
   modal
@@ -175,6 +202,17 @@ export function openEditPlayersDialog(game) {
       g.target = t;
     } else {
       g.target = sdef.target;
+    }
+    // Yam's Chance option: store the flag, and if it was turned off drop any
+    // Chance cells already entered so totals and completion stay consistent.
+    if (safeMode === "yams" && yamsChance) {
+      g.yamsChance = true;
+    } else {
+      delete g.yamsChance;
+      g.rounds = g.rounds.filter((r) => {
+        const cell = Object.values(r.scores)[0];
+        return !(cell && cell.category === "chance");
+      });
     }
     upsertGame(g);
     overlay.remove();

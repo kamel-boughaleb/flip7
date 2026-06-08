@@ -1,16 +1,15 @@
 /* <app-yams-table> — the Yam's scorecard in the details screen (missions ×
-   players, upper subtotal, +35 bonus, grand total). Upper cells are an editable
-   die count (score = count × face); lower cells toggle value ↔ 0. Mutations
-   write to the store and emit a bubbling "changed" event carrying the prior
-   winner id so the details screen can refresh and celebrate a new win. */
+   players, upper subtotal, +35 bonus, grand total). Each filled cell is a
+   button; tapping it emits a bubbling "editturn" event ({pid, category}) so the
+   details screen can open the turn editor to change the mission and/or value.
+   Empty cells (missions not yet played) aren't editable. */
 import { esc } from "../util.js";
-import { winner, winners, playerTotal } from "../scoring.js";
-import { getGame, upsertGame } from "../store.js";
+import { winners, playerTotal } from "../scoring.js";
 import {
-  YAMS_CATEGORIES,
   YAMS_BONUS_MIN,
   YAMS_BONUS,
-  yamsCat,
+  yamsBadge,
+  yamsCategories,
   yamsUpperSum,
   yamsUpperBonus,
 } from "../rules.js";
@@ -22,22 +21,6 @@ class AppYamsTable extends HTMLElement {
   }
   get game() {
     return this._g;
-  }
-
-  // Rewrite a player's cell for a category, then ask the parent to refresh.
-  setCellPoints(pid, catKey, pts) {
-    const g = getGame(this._g.id);
-    const before = (winner(g) || {}).id || null;
-    const i = g.rounds.findIndex((r) => {
-      const c = r.scores[pid];
-      return c && c.category === catKey;
-    });
-    if (i < 0) return;
-    g.rounds[i].scores[pid].points = pts;
-    upsertGame(g);
-    this.dispatchEvent(
-      new CustomEvent("changed", { detail: { before }, bubbles: true }),
-    );
   }
 
   render() {
@@ -57,16 +40,11 @@ class AppYamsTable extends HTMLElement {
     const cellHtml = (catKey, pid) => {
       const e = byCat[catKey] && byCat[catKey][pid];
       if (!e) return `<td class="yams-cell yams-empty">·</td>`;
-      const cat = yamsCat(catKey);
       const struck = e.points === 0 ? " struck" : "";
-      if (cat.section === "upper") {
-        return `<td class="yams-cell"><input type="number" inputmode="numeric" class="cell-input yams-up-input${struck}" data-cat="${catKey}" data-pid="${pid}" data-face="${cat.face}" value="${e.points}" /></td>`;
-      }
-      const on = e.points !== 0;
-      return `<td class="yams-cell"><button type="button" class="yams-toggle${on ? " active" : ""}" data-cat="${catKey}" data-pid="${pid}" data-fixed="${cat.fixed}">${cat.fixed}</button></td>`;
+      return `<td class="yams-cell"><button type="button" class="yams-cell-edit${struck}" data-cat="${catKey}" data-pid="${pid}" aria-label="Modifier ce tour">${e.points}</button></td>`;
     };
     const rowFor = (cat) =>
-      `<tr><td class="player-name">${esc(cat.label)}${cat.fixed != null ? ` <span class="yams-fixed-tag">${cat.fixed}</span>` : ""}</td>${players.map((p) => cellHtml(cat.key, p.id)).join("")}</tr>`;
+      `<tr><td class="player-name">${esc(cat.label)} <span class="yams-fixed-tag">${yamsBadge(cat)}</span></td>${players.map((p) => cellHtml(cat.key, p.id)).join("")}</tr>`;
 
     const head = `<thead><tr><th class="player-name">Mission</th>${players
       .map(
@@ -74,10 +52,13 @@ class AppYamsTable extends HTMLElement {
           `<th>${esc(p.name)}${winIds.has(p.id) ? ' <span class="crown"><i class="fa-regular fa-crown"></i></span>' : ""}</th>`,
       )
       .join("")}</tr></thead>`;
-    const upperRows = YAMS_CATEGORIES.filter((c) => c.section === "upper")
+    const cats = yamsCategories(game);
+    const upperRows = cats
+      .filter((c) => c.section === "upper")
       .map(rowFor)
       .join("");
-    const lowerRows = YAMS_CATEGORIES.filter((c) => c.section === "lower")
+    const lowerRows = cats
+      .filter((c) => c.section === "lower")
       .map(rowFor)
       .join("");
     const subtotal = `<tr class="yams-subtotal"><td class="player-name">Sous-total</td>${players
@@ -112,41 +93,17 @@ class AppYamsTable extends HTMLElement {
         </table>
       </div>`;
 
-    // Upper-section cells: editable die count (score = count × face).
-    this.querySelectorAll(".yams-up-input").forEach((input) => {
-      const face = Number(input.dataset.face) || 1;
-      const { cat: catKey, pid } = input.dataset;
-      const points = Number(input.value) || 0;
-      input.addEventListener("focus", () => {
-        input.value = String(Math.round(points / face));
-        input.select();
-      });
-      const commit = () => {
-        const count = Math.max(
-          0,
-          Math.min(5, Math.round(Number(input.value) || 0)),
-        );
-        const pts = count * face;
-        if (pts === points) {
-          input.value = String(points);
-          return;
-        }
-        this.setCellPoints(pid, catKey, pts);
-      };
-      input.addEventListener("blur", commit);
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") input.blur();
-      });
-    });
-
-    // Lower-section cells: toggle between the mission value and 0 (barré).
-    this.querySelectorAll(".yams-toggle").forEach((btn) => {
+    // Tapping a filled cell asks the details screen to open the turn editor.
+    this.querySelectorAll(".yams-cell-edit").forEach((btn) => {
       const { cat: catKey, pid } = btn.dataset;
-      const fixed = Number(btn.dataset.fixed) || 0;
-      btn.addEventListener("click", () => {
-        const on = btn.classList.contains("active");
-        this.setCellPoints(pid, catKey, on ? 0 : fixed);
-      });
+      btn.addEventListener("click", () =>
+        this.dispatchEvent(
+          new CustomEvent("editturn", {
+            detail: { pid, category: catKey },
+            bubbles: true,
+          }),
+        ),
+      );
     });
   }
 }
