@@ -57,16 +57,9 @@ export function toast(msg) {
   setTimeout(() => t.remove(), 1800);
 }
 
-// Big fan-card FLIP7 logo (home hero / setup header).
+// Brand logo (home hero / setup header).
 export function logoMarkup() {
-  return `
-    <div class="flip7-logo">
-      <div class="fan">
-        <span class="c1"></span><span class="c2"></span><span class="c3"></span><span class="c4"></span><span class="c5"></span>
-      </div>
-      <div class="logo-text"><span class="flip">FLIP</span><span class="seven">7</span></div>
-      <div class="ribbon">TABLEAU DES SCORES</div>
-    </div>`;
+  return `<div class="brand-logo"><img src="img/logo_color.svg" alt="Kigagne ?" /></div>`;
 }
 
 // Confetti burst inside a positioned container.
