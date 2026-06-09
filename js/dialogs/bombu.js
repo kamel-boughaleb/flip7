@@ -179,9 +179,30 @@ function openBombuScoreDialog(game) {
   const chooser = bombuChooser(game);
   const c = bombuContract(game.pendingContract);
   if (!chooser || !c) return;
+  const m = c.entry || { mode: "free" };
   const turnNo = game.rounds.length + 1;
+  // State, by mode: count/free/rank keep a per-player value; "who" keeps the id
+  // of the single player who took the penalty (8 pts).
   const vals = {};
   game.players.forEach((p) => (vals[p.id] = ""));
+  let whoPid = null;
+
+  // Resolved points for a player given the current entry state.
+  const pointsFor = (pid) => {
+    if (m.mode === "count") return (Number(vals[pid]) || 0) * m.per;
+    if (m.mode === "who") return whoPid === pid ? m.value : 0;
+    return Number(vals[pid]) || 0; // rank / free: the value is the points
+  };
+
+  // Per-mode instruction shown under the title.
+  const hint =
+    m.mode === "count"
+      ? `Nombre de ${esc(m.unit)} par joueur (× ${m.per})`
+      : m.mode === "who"
+        ? esc(m.ask)
+        : m.mode === "rank"
+          ? "Place de chaque joueur"
+          : "Saisie libre";
 
   const root = document.getElementById("modal-root");
   const overlay = el(`<div class="overlay"></div>`);
@@ -193,31 +214,94 @@ function openBombuScoreDialog(game) {
       <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
     </div>
     <div class="scores-dialog-body">
-      <div class="turn-meta">${esc(c.label)} · <span class="muted">${esc(c.note)}</span></div>
+      <div class="turn-meta">${hint}</div>
       <div class="entry-grid" id="bombuScores"></div>
+      <div class="bombu-check" id="bombuCheck"></div>
     </div>
     <div class="scores-dialog-foot">
-      <button class="btn btn-ghost" id="bombuChange"><i class="fa-regular fa-pen"></i> Contrat</button>
       <div class="spacer"></div>
       <button class="btn btn-ghost" data-act="close">Annuler</button>
       <button class="btn btn-primary" id="saveBombu">Enregistrer</button>
     </div>`;
   const scoresEl = modal.querySelector("#bombuScores");
-  game.players.forEach((p) => {
-    const row = el(`
-      <div class="entry-player">
-        <span class="pname">${esc(p.name)}</span>
-        <div class="entry-controls">
-          <input type="number" inputmode="numeric" class="cell-input" data-pid="${p.id}" placeholder="0" value="" />
-        </div>
-      </div>`);
-    const input = row.querySelector("input");
-    input.addEventListener("input", () => (vals[p.id] = input.value));
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") save();
+  const checkEl = modal.querySelector("#bombuCheck");
+
+  // Compare the entered total against the contract's theoretical total and warn
+  // if it overshoots or is still incomplete.
+  const updateMsg = () => {
+    if (typeof c.total !== "number") {
+      checkEl.textContent = "";
+      checkEl.className = "bombu-check";
+      return;
+    }
+    const sum = game.players.reduce((s, p) => s + pointsFor(p.id), 0);
+    const over = c.total >= 0 ? sum > c.total : sum < c.total;
+    const under = c.total >= 0 ? sum < c.total : sum > c.total;
+    if (over) {
+      checkEl.textContent = `⚠ Total trop élevé : ${sum} (théorique ${c.total})`;
+      checkEl.className = "bombu-check over";
+    } else if (under) {
+      checkEl.textContent = `Il manque des points : ${sum} / ${c.total}`;
+      checkEl.className = "bombu-check under";
+    } else {
+      checkEl.textContent = `✓ Total correct (${sum})`;
+      checkEl.className = "bombu-check ok";
+    }
+  };
+
+  // Render the per-player controls for the contract's entry mode.
+  const renderRows = () => {
+    scoresEl.innerHTML = "";
+    game.players.forEach((p) => {
+      const row = el(
+        `<div class="entry-player"><span class="pname">${esc(p.name)}</span><div class="entry-controls"></div></div>`,
+      );
+      const ctr = row.querySelector(".entry-controls");
+      if (m.mode === "count" || m.mode === "free") {
+        ctr.innerHTML = `<input type="number" inputmode="numeric" class="cell-input"${m.mode === "count" ? ' min="0"' : ""} placeholder="0" value="${esc(vals[p.id])}" />${m.mode === "count" ? `<span class="bombu-pts muted">= ${pointsFor(p.id)} pts</span>` : ""}`;
+        const input = ctr.querySelector("input");
+        input.addEventListener("input", () => {
+          vals[p.id] = input.value;
+          const pts = ctr.querySelector(".bombu-pts");
+          if (pts) pts.textContent = `= ${pointsFor(p.id)} pts`;
+          updateMsg();
+        });
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") save();
+        });
+      } else if (m.mode === "rank") {
+        ctr.classList.add("bombu-rank");
+        ctr.innerHTML = m.values
+          .map(
+            (v) =>
+              `<button type="button" class="btn btn-ghost btn-sm bombu-rank-btn${String(vals[p.id]) === String(v) ? " active" : ""}" data-val="${v}">${v > 0 ? "+" + v : v}</button>`,
+          )
+          .join("");
+        ctr.querySelectorAll(".bombu-rank-btn").forEach((b) =>
+          b.addEventListener("click", () => {
+            const v = Number(b.dataset.val);
+            vals[p.id] = v;
+            // Keep the four values distinct (each place taken once).
+            game.players.forEach((q) => {
+              if (q.id !== p.id && Number(vals[q.id]) === v && vals[q.id] !== "")
+                vals[q.id] = "";
+            });
+            renderRows();
+          }),
+        );
+      } else if (m.mode === "who") {
+        const on = whoPid === p.id;
+        ctr.innerHTML = `<button type="button" class="btn btn-ghost btn-sm bombu-pick-btn${on ? " active" : ""}">${on ? `+${m.value} pts` : "Désigner"}</button>`;
+        ctr.querySelector("button").addEventListener("click", () => {
+          whoPid = on ? null : p.id;
+          renderRows();
+        });
+      }
+      scoresEl.appendChild(row);
     });
-    scoresEl.appendChild(row);
-  });
+    updateMsg();
+  };
+  renderRows();
 
   const close = () => overlay.remove();
   modal.querySelectorAll("[data-act=close]").forEach((b) =>
@@ -226,16 +310,11 @@ function openBombuScoreDialog(game) {
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) close();
   });
-  // Change the contract: drop back to the picker without losing the deal.
-  modal.querySelector("#bombuChange").addEventListener("click", () => {
-    overlay.remove();
-    openBombuContractDialog(game);
-  });
 
   const save = () => {
     const scores = {};
     game.players.forEach((p) => {
-      scores[p.id] = { points: Number(vals[p.id]) || 0 };
+      scores[p.id] = { points: pointsFor(p.id) };
     });
     const g = getGame(game.id);
     const before = (winner(g) || {}).id || null;

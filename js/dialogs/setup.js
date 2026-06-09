@@ -16,6 +16,7 @@ import {
 } from "../rules.js";
 import { go } from "../nav.js";
 import { renderPlayerRows } from "./player-rows.js";
+import { renderTeamBuilder, makeTeam } from "./team-builder.js";
 
 export function openSetupDialog(opts = {}) {
   const place = getSelectedPlace();
@@ -33,7 +34,24 @@ export function openSetupDialog(opts = {}) {
           { id: uid(), name: "" },
         ];
   let mode = opts.mode && MODES[opts.mode] ? opts.mode : DEFAULT_MODE;
-  let yamsChance = false; // Yam's-only option: add the optional Chance case
+  // Replaying a game carries its parameters over (target, Chance…).
+  let yamsChance = !!opts.yamsChance; // Yam's-only option: add the Chance case
+  // Time's Up! builds teams of named players here (carried over on replay/edit).
+  // Only adopt incoming teams when the (replayed) game is itself a team-builder
+  // game; otherwise opts.teams would be individual players, not real teams.
+  let teams =
+    opts.teams && opts.teams.length && rulesetOf(mode).teamBuilder
+      ? opts.teams.map((t) => ({
+          id: t.id || uid(),
+          name: t.name || "",
+          members: (t.members || []).map((m) => ({
+            id: m.id || uid(),
+            name: m.name || "",
+          })),
+        }))
+      : [];
+  while (teams.length < 2) teams.push(makeTeam(teams));
+  let rosterDraw = () => {};
 
   modal.innerHTML = `
     <div class="rules-dialog-head">
@@ -47,11 +65,11 @@ export function openSetupDialog(opts = {}) {
       </div>
       <div class="field" id="targetField" hidden>
         <label for="targetInput">Score cible</label>
-        <input type="number" inputmode="numeric" class="cell-input target-input" id="targetInput" placeholder="2000" value="2000" />
+        <input type="number" inputmode="numeric" class="cell-input target-input" id="targetInput" placeholder="2000" value="${opts.target != null ? esc(String(opts.target)) : "2000"}" />
       </div>
       <div class="field" id="yamsOptField" hidden>
         <label>Options</label>
-        <button type="button" class="setup-opt" id="yamsChanceToggle" aria-pressed="false">
+        <button type="button" class="setup-opt${yamsChance ? " active" : ""}" id="yamsChanceToggle" aria-pressed="${yamsChance}">
           <span class="setup-opt-main">
             <span class="setup-opt-name">Chance</span>
             <span class="setup-opt-desc muted">Ajoute une 13ᵉ case : la somme des 5 dés.</span>
@@ -84,6 +102,52 @@ export function openSetupDialog(opts = {}) {
   // Games with a fixed roster: Contrée (teams, 4) and Bombu (fixedPlayers: 4).
   const fixedCount = () =>
     isTeams() ? 4 : rulesetOf(mode).fixedPlayers || 0;
+  // Time's Up!: the roster is a team builder instead of a flat player list.
+  const useTeamBuilder = () => !!rulesetOf(mode).teamBuilder;
+  // Mount the right roster editor for the current mode (re-runs on mode switch).
+  function mountRoster() {
+    if (useTeamBuilder()) {
+      rosterDraw = renderTeamBuilder(rowsEl, teams, {
+        onChange: () => {},
+        suggestions: () => placePlayerNames(place, "joueur"),
+      });
+    } else {
+      rosterDraw = renderPlayerRows(rowsEl, players, {
+        allowRemove: () => !fixedCount(),
+        placeholder: () => unitOf(mode).placeholder,
+        suggestions: () => placePlayerNames(place, unitKeyOf(mode)),
+      });
+    }
+  }
+  // Carry the typed names across when switching between a flat player list and
+  // the team builder, so changing the game type mid-setup doesn't lose them.
+  let lastBuilder = useTeamBuilder();
+  function syncRoster(nowBuilder) {
+    if (nowBuilder === lastBuilder) return;
+    if (nowBuilder) {
+      // → team builder: spread the typed players across the teams.
+      const names = players.map((p) => (p.name || "").trim()).filter(Boolean);
+      if (names.length) {
+        teams.forEach((t) => (t.members = []));
+        names.forEach((n, i) =>
+          teams[i % teams.length].members.push({ id: uid(), name: n }),
+        );
+        teams.forEach((t) => {
+          if (!t.members.length) t.members.push({ id: uid(), name: "" });
+        });
+      }
+    } else {
+      // → flat list: collect every team member back into the player list.
+      const names = teams
+        .flatMap((t) => t.members.map((m) => (m.name || "").trim()))
+        .filter(Boolean);
+      players = names.length
+        ? names.map((n) => ({ id: uid(), name: n }))
+        : [{ id: uid(), name: "" }, { id: uid(), name: "" }];
+      while (players.length < 2) players.push({ id: uid(), name: "" });
+    }
+    lastBuilder = nowBuilder;
+  }
   // Reflect the selected game's wording (players vs teams).
   const applyUnit = () => {
     const u = unitOf(mode);
@@ -105,15 +169,18 @@ export function openSetupDialog(opts = {}) {
   const applyModeLayout = () => {
     targetField.hidden = !rulesetOf(mode).configurableTarget;
     yamsOptField.hidden = mode !== "yams";
+    syncRoster(useTeamBuilder()); // carry names over when the roster type flips
     const fc = fixedCount();
-    if (fc) {
+    if (useTeamBuilder()) {
+      addBtn.style.display = "none"; // the team builder has its own add button
+    } else if (fc) {
       while (players.length < fc) players.push({ id: uid(), name: "" });
       if (players.length > fc) players.length = fc;
       addBtn.style.display = "none";
     } else {
       addBtn.style.display = "";
     }
-    drawRows();
+    mountRoster();
     updateTeamsHint();
   };
 
@@ -132,20 +199,22 @@ export function openSetupDialog(opts = {}) {
   );
   syncModeTabs();
 
-  const drawRows = renderPlayerRows(rowsEl, players, {
-    allowRemove: () => !fixedCount(),
-    placeholder: () => unitOf(mode).placeholder,
-    suggestions: () => placePlayerNames(place, unitKeyOf(mode)),
-  });
   applyUnit();
-  applyModeLayout();
+  applyModeLayout(); // mounts the roster
   // Keep the teams preview in sync with name edits and reordering.
   rowsEl.addEventListener("input", updateTeamsHint);
   rowsEl.addEventListener("pointerup", () => setTimeout(updateTeamsHint, 0));
   modal.querySelector("#addPlayer").addEventListener("click", () => {
-    players.push({ id: uid(), name: "" });
-    drawRows();
-    rowsEl.querySelector(".player-row:last-child input").focus();
+    if (useTeamBuilder()) {
+      teams.push(makeTeam(teams));
+      rosterDraw();
+      const cards = rowsEl.querySelectorAll(".team-card");
+      if (cards.length) cards[cards.length - 1].querySelector(".team-name").focus();
+    } else {
+      players.push({ id: uid(), name: "" });
+      rosterDraw();
+      rowsEl.querySelector(".player-row:last-child input").focus();
+    }
   });
 
   yamsChanceToggle.addEventListener("click", () => {
@@ -164,6 +233,42 @@ export function openSetupDialog(opts = {}) {
 
   modal.querySelector("#start").addEventListener("click", () => {
     const def = rulesetOf(mode);
+    const now = Date.now();
+    // Time's Up!: build the scoring entities from the team builder. Each team
+    // keeps its named members (used for per-player stats).
+    if (useTeamBuilder()) {
+      const built = teams
+        .map((t) => ({
+          id: t.id,
+          name: t.name.trim(),
+          members: t.members
+            .map((m) => ({ id: m.id, name: m.name.trim() }))
+            .filter((m) => m.name),
+        }))
+        .filter((t) => t.name || t.members.length);
+      if (built.length < 2) return toast("Ajoutez au moins 2 équipes");
+      for (const t of built)
+        if (!t.name) return toast("Donnez un nom à chaque équipe");
+      const dupT = firstDuplicateName(built.map((t) => t.name));
+      if (dupT) return toast(`L'équipe « ${dupT} » est en double`);
+      const dupP = firstDuplicateName(
+        built.flatMap((t) => t.members.map((m) => m.name)),
+      );
+      if (dupP) return toast(`« ${dupP} » est présent dans deux équipes`);
+      const game = {
+        id: uid(),
+        name: gameNameFromDate(now),
+        createdAt: now,
+        target: def.target,
+        mode,
+        place,
+        players: built,
+        rounds: [],
+      };
+      upsertGame(game);
+      overlay.remove();
+      return go("game", { id: game.id });
+    }
     const valid = players.filter((p) => p.name.trim());
     if (def.teams) {
       if (valid.length !== 4)
@@ -181,7 +286,6 @@ export function openSetupDialog(opts = {}) {
       target = Number(targetInput.value) || 0;
       if (target <= 0) return toast("Indiquez un score cible valide");
     }
-    const now = Date.now();
     const game = {
       id: uid(),
       name: gameNameFromDate(now),

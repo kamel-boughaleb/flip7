@@ -32,9 +32,14 @@ function buildEntryRow(game, draft, p, onChange) {
   const d = draft[p.id];
   const notify = () => onChange && onChange();
   if (def.entry === "number") {
+    // Team games (Time's Up!): list the team's players under its name.
+    const nameCell =
+      p.members && p.members.length
+        ? `<div class="pname"><span>${esc(p.name)}</span><div class="name-sub muted">${p.members.map((m) => esc(m.name)).join(", ")}</div></div>`
+        : `<span class="pname">${esc(p.name)}</span>`;
     const row = el(`
       <div class="entry-player${d.doubled ? " doubled" : ""}">
-        <span class="pname">${esc(p.name)}</span>
+        ${nameCell}
         <div class="entry-controls">
           ${def.negatives ? '<button type="button" class="btn btn-ghost btn-sm sign-btn" title="Score négatif" aria-label="Inverser le signe">±</button>' : ""}
           <input type="number" inputmode="numeric" class="cell-input" placeholder="0" value="${esc(d.points)}" />

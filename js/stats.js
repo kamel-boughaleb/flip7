@@ -18,6 +18,7 @@ const STAT_FILTERS = {
   qwirkle: { match: (g) => g.mode === "qwirkle", order: "desc" },
   contree: { match: (g) => g.mode === "contree", order: "desc" },
   yams: { match: (g) => g.mode === "yams", order: "desc" },
+  bombu: { match: (g) => g.mode === "bombu", order: "asc" }, // fewest points wins
 };
 function computeStats(place, filter = "flip7") {
   const f = STAT_FILTERS[filter] || STAT_FILTERS.flip7;
@@ -27,29 +28,36 @@ function computeStats(place, filter = "flip7") {
     cur == null || (f.order === "asc" ? v < cur : v > cur);
   const games = gamesForPlace(place).filter(f.match);
   const map = {}; // key: lowercased trimmed name -> aggregate
+  const ensure = (name) => {
+    const key = name.toLowerCase();
+    if (!map[key])
+      map[key] = {
+        name,
+        games: 0,
+        points: 0,
+        wins: 0,
+        elims: 0, // number of busted (eliminated) rounds across games
+        flip7s: 0, // number of Flip 7 bonuses scored across games
+        bestGame: null, // best single-game total (min for asc, max for desc)
+        bestRound: null, // best single-round score (min for asc, max for desc)
+      };
+    return map[key];
+  };
   games.forEach((g) => {
     const def = defFor(g);
     // Team games (Contrée): a player's figures are those of their team
     // (seats 1 & 3 → team A, 2 & 4 → team B).
     const teamOfSeat = (idx) => (idx % 2 === 0 ? "A" : "B");
+    const teamMembers = (entry) =>
+      def.teamBuilder && entry.members && entry.members.length
+        ? entry.members.map((m) => (m.name || "").trim()).filter(Boolean)
+        : [(entry.name || "").trim()].filter(Boolean);
     g.players.forEach((p, idx) => {
-      const name = p.name.trim();
-      if (!name) return;
-      const key = name.toLowerCase();
-      if (!map[key])
-        map[key] = {
-          name,
-          games: 0,
-          points: 0,
-          wins: 0,
-          elims: 0, // number of busted (eliminated) rounds across games
-          flip7s: 0, // number of Flip 7 bonuses scored across games
-          bestGame: null, // best single-game total (min for asc, max for desc)
-          bestRound: null, // best single-round score (min for asc, max for desc)
-        };
-      const agg = map[key];
-      agg.games += 1;
       if (def.teams) {
+        const name = p.name.trim();
+        if (!name) return;
+        const agg = ensure(name);
+        agg.games += 1;
         const teamId = teamOfSeat(idx);
         const total = teamTotal(g, teamId);
         agg.points += total;
@@ -59,8 +67,13 @@ function computeStats(place, filter = "flip7") {
           const rv = Number(r.scores && r.scores[teamId]) || 0;
           if (isBetter(rv, agg.bestRound)) agg.bestRound = rv;
         });
-      } else {
-        const total = playerTotal(g, p.id);
+        return;
+      }
+      // Individual games, and Time's Up! teams (credited to each member).
+      const total = playerTotal(g, p.id);
+      teamMembers(p).forEach((name) => {
+        const agg = ensure(name);
+        agg.games += 1;
         agg.points += total;
         if (g.rounds.length && isBetter(total, agg.bestGame))
           agg.bestGame = total;
@@ -71,7 +84,7 @@ function computeStats(place, filter = "flip7") {
           const rv = def.cellValue(cell);
           if (isBetter(rv, agg.bestRound)) agg.bestRound = rv;
         });
-      }
+      });
     });
     // Ties count as a win for every co-winner, not just one representative.
     if (def.teams) {
@@ -83,8 +96,10 @@ function computeStats(place, filter = "flip7") {
       });
     } else {
       winners(g).forEach((w) => {
-        const key = w.name.trim().toLowerCase();
-        if (map[key]) map[key].wins += 1;
+        teamMembers(w).forEach((name) => {
+          const key = name.toLowerCase();
+          if (map[key]) map[key].wins += 1;
+        });
       });
     }
   });
@@ -209,7 +224,7 @@ function metricsForVersion(mode) {
   if (FLIP7_VERSIONS.has(mode))
     return [...base, "elims", "flip7s", "bestGame", "bestRound"];
   // Games with a meaningful single-game / single-round high score.
-  if (["skyjo", "qwirkle", "yams", "timesup", "contree"].includes(mode))
+  if (["skyjo", "qwirkle", "yams", "timesup", "contree", "bombu"].includes(mode))
     return [...base, "bestGame", "bestRound"];
   return base;
 }

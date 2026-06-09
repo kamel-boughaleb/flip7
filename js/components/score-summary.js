@@ -96,9 +96,14 @@ class AppScoreSummary extends HTMLElement {
         } else if (hasDraftFor(p)) {
           preview = `<span class="score-preview"><i class="fa-regular fa-arrow-right-long"></i> ${projected[p.id]}${previewCrown}</span>`;
         }
+        // Team games (Time's Up!): list the team's players under its name.
+        const sub =
+          p.members && p.members.length
+            ? `<div class="name-sub muted">${p.members.map((m) => esc(m.name)).join(", ")}</div>`
+            : "";
         return `<tr class="${won ? "winner-row" : ""}${eliminated || drew ? " eliminated-row" : ""}">
           <td class="rank-col">${rankBadge}</td>
-          <td class="player-name">${esc(p.name)}</td>
+          <td class="player-name">${esc(p.name)}${sub}</td>
           <td class="total-cell"><span class="score-badge ${rankClass}">${p.total}${crown}</span>${preview}</td>
         </tr>`;
       })

@@ -42,9 +42,20 @@ class AppBombuTable extends HTMLElement {
       )
       .join("")}</tr></thead>`;
 
+    // Deals are grouped by chooser (each player plays all their contracts in a
+    // row), so a section header — like the Yam's section rows — separates each
+    // player's block of contracts.
+    const span = players.length + 1;
+    let lastChooser = null;
     const rows = game.rounds
       .map((r, i) => {
         const c = bombuContract(r.contract);
+        let section = "";
+        if (r.chooser !== lastChooser) {
+          lastChooser = r.chooser;
+          const ch = players.find((p) => p.id === r.chooser);
+          section = `<tr class="yams-section"><td colspan="${span}">${esc(ch ? ch.name : "—")}</td></tr>`;
+        }
         const cells = players
           .map((p) => {
             const cell = r.scores[p.id];
@@ -53,7 +64,7 @@ class AppBombuTable extends HTMLElement {
             return `<td class="yams-cell"><input type="number" inputmode="numeric" class="cell-input bombu-cell-input${chooser}" data-round="${i}" data-pid="${p.id}" value="${pts}" /></td>`;
           })
           .join("");
-        return `<tr><td class="player-name bombu-deal"><span class="bombu-deal-no">${i + 1}</span> <span class="bombu-deal-contract">${esc(c ? c.label : "?")}</span></td>${cells}</tr>`;
+        return `${section}<tr><td class="player-name bombu-deal"><span class="bombu-deal-no">${i + 1}</span> <span class="bombu-deal-contract">${esc(c ? c.label : "?")}</span></td>${cells}</tr>`;
       })
       .join("");
 

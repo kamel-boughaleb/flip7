@@ -17,3 +17,14 @@
 # above, so it never triggers a 500 the rewrite wouldn't. The response status is
 # 404 but the app boots and routes from location.pathname.
 ErrorDocument 404 /index.html
+
+# Always revalidate the app code. The HTML <meta> cache hints don't cover the
+# statically-imported ES modules, so without this the browser keeps serving
+# stale js/css (e.g. an old stats.js missing a new filter → fallback to the
+# wrong data). no-store keeps every load fresh.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|mjs|css)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+  </FilesMatch>
+</IfModule>
+

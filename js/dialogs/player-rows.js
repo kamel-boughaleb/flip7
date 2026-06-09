@@ -4,6 +4,49 @@
 import { el, esc } from "../util.js";
 import { uid, getSelectedPlace, placePlayerNames } from "../store.js";
 
+// Wire a custom name-autocomplete dropdown to an input + its sibling
+// `.name-suggest` box. Shared by the player-list editor and the team builder so
+// they behave identically. `getTaken` returns names to hide (already chosen);
+// `onPick` runs when a suggestion is tapped. An in-flow block (not a fixed
+// overlay) so it follows the input when the mobile keyboard resizes the view.
+export function wireNameSuggest(input, box, { getSuggestions, getTaken, onPick }) {
+  const renderList = () => {
+    const q = (input.value || "").trim().toLowerCase();
+    const taken = getTaken ? getTaken() : new Set();
+    const matches = getSuggestions()
+      .filter((n) => {
+        const nl = n.toLowerCase();
+        return !taken.has(nl) && nl !== q && (!q || nl.includes(q));
+      })
+      .slice(0, 6);
+    if (!matches.length) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = matches
+      .map((n) => `<button type="button" class="name-suggest-item">${esc(n)}</button>`)
+      .join("");
+    box.hidden = false;
+    box.scrollIntoView({ block: "nearest" });
+  };
+  input.addEventListener("focus", renderList);
+  input.addEventListener("input", renderList);
+  input.addEventListener("blur", () =>
+    setTimeout(() => {
+      box.hidden = true;
+    }, 150),
+  );
+  box.addEventListener("pointerdown", (e) => {
+    const btn = e.target.closest(".name-suggest-item");
+    if (!btn) return;
+    e.preventDefault();
+    input.value = btn.textContent;
+    box.hidden = true;
+    if (onPick) onPick(btn.textContent);
+  });
+}
+
 export function renderPlayerRows(
   rowsEl,
   players,
@@ -25,77 +68,52 @@ export function renderPlayerRows(
       : suggestions || placePlayerNames(getSelectedPlace());
   let dragSrc = null;
 
-  // Wire a custom suggestions dropdown to a row's name input. The dropdown is
-  // an in-flow block right under the input (inside the scrollable dialog body)
-  // so it follows the input — unlike a position:fixed overlay, it doesn't drift
-  // when the mobile keyboard resizes the viewport, and it's never clipped.
+  // Wire the shared name-autocomplete dropdown to a row's name input.
   function wireSuggestions(input, i) {
     const box = input.parentElement.querySelector(".name-suggest");
-    const renderList = () => {
-      const q = (input.value || "").trim().toLowerCase();
-      // Hide names already chosen in other rows + the current exact value.
-      const taken = new Set(
-        players
-          .filter((_, k) => k !== i)
-          .map((p) => (p.name || "").trim().toLowerCase())
-          .filter(Boolean),
-      );
-      const matches = getSuggestions()
-        .filter((n) => {
-          const nl = n.toLowerCase();
-          return !taken.has(nl) && nl !== q && (!q || nl.includes(q));
-        })
-        .slice(0, 6);
-      if (!matches.length) {
-        box.hidden = true;
-        box.innerHTML = "";
-        return;
-      }
-      box.innerHTML = matches
-        .map(
-          (n) =>
-            `<button type="button" class="name-suggest-item">${esc(n)}</button>`,
-        )
-        .join("");
-      box.hidden = false;
-      // Keep the list in view (e.g. when the keyboard just opened).
-      box.scrollIntoView({ block: "nearest" });
-    };
-    input.addEventListener("focus", renderList);
-    input.addEventListener("input", renderList);
-    // Delay so a tap on an item registers before the list hides.
-    input.addEventListener("blur", () =>
-      setTimeout(() => {
-        box.hidden = true;
-      }, 150),
-    );
-    // pointerdown (not click) fires before blur — works for touch and mouse.
-    box.addEventListener("pointerdown", (e) => {
-      const btn = e.target.closest(".name-suggest-item");
-      if (!btn) return;
-      e.preventDefault();
-      input.value = btn.textContent;
-      players[i].name = btn.textContent;
-      box.hidden = true;
-      revalidate(i);
+    wireNameSuggest(input, box, {
+      getSuggestions,
+      // Hide names already chosen in other rows.
+      getTaken: () =>
+        new Set(
+          players
+            .filter((_, k) => k !== i)
+            .map((p) => (p.name || "").trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      onPick: (name) => {
+        players[i].name = name;
+        revalidate(i);
+      },
     });
   }
 
   // Index of the row whose upper half currently contains pointer Y, i.e. the
   // insertion target. Falls back to the last row when below every center.
+  // Insertion index among the rows EXCLUDING the one being dragged (it's removed
+  // on drop), so the indicator and the final position match — and the last slot
+  // is reachable (returns rows.length).
   function rowIndexAtY(y) {
-    const rows = [...rowsEl.querySelectorAll(".player-row")];
+    const rows = [...rowsEl.querySelectorAll(".player-row:not(.dragging)")];
     for (let j = 0; j < rows.length; j++) {
       const r = rows[j].getBoundingClientRect();
       if (y < r.top + r.height / 2) return j;
     }
-    return rows.length - 1;
+    return rows.length;
   }
 
   function clearHints() {
     rowsEl
       .querySelectorAll(".player-row")
       .forEach((r) => r.classList.remove("drag-over", "dragging"));
+    rowsEl.querySelectorAll(".drop-indicator").forEach((e) => e.remove());
+  }
+  // Line showing where the dragged row will land (before row[index], or end).
+  function showIndicator(index) {
+    const rows = [...rowsEl.querySelectorAll(".player-row:not(.dragging)")];
+    const ind = el(`<div class="drop-indicator"></div>`);
+    if (index >= rows.length) rowsEl.appendChild(ind);
+    else rowsEl.insertBefore(ind, rows[index]);
   }
 
   function draw() {
@@ -137,22 +155,20 @@ export function renderPlayerRows(
       handle.addEventListener("pointermove", (e) => {
         if (dragSrc === null) return;
         e.preventDefault();
-        const j = rowIndexAtY(e.clientY);
-        rowsEl
-          .querySelectorAll(".player-row")
-          .forEach((r, k) =>
-            r.classList.toggle("drag-over", k === j && j !== dragSrc),
-          );
+        // Measure on the clean layout, then show the insertion line.
+        rowsEl.querySelectorAll(".drop-indicator").forEach((x) => x.remove());
+        showIndicator(rowIndexAtY(e.clientY));
       });
       const finish = (e) => {
         if (dragSrc === null) return;
+        rowsEl.querySelectorAll(".drop-indicator").forEach((x) => x.remove());
+        // `j` excludes the dragged row, so removing src then inserting at j is
+        // correct directly (no off-by-one).
         const j = rowIndexAtY(e.clientY);
         const src = dragSrc;
         dragSrc = null;
-        if (j !== src) {
-          const moved = players.splice(src, 1)[0];
-          players.splice(j, 0, moved);
-        }
+        const moved = players.splice(src, 1)[0];
+        players.splice(j, 0, moved);
         draw();
       };
       handle.addEventListener("pointerup", finish);
