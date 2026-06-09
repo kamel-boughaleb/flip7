@@ -96,12 +96,22 @@ export function openEditPlayersDialog(game) {
   const hasRounds = game.rounds.length > 0;
   const curTurn = !!defFor(game).turnBased;
   const curTeams = !!defFor(game).teams;
+  const curBombu = defFor(game).entry === "bombu";
   const isTeams = () => rulesetOf(mode).teams;
+  // Games with a fixed roster: Contrée (teams, 4) and Bombu (fixedPlayers: 4).
+  const fixedCount = () => (isTeams() ? 4 : rulesetOf(mode).fixedPlayers || 0);
   const modeTabs = modal.querySelector("#modeTabs");
   const tabBtns = modeTabs.querySelectorAll(".mode-tab");
   tabBtns.forEach((b) => {
     const r = rulesetOf(b.dataset.mode);
-    if (hasRounds && (!!r.turnBased !== curTurn || !!r.teams !== curTeams)) {
+    // Bombu stores deals differently too, so it can't be switched to/from once
+    // the game has started.
+    if (
+      hasRounds &&
+      (!!r.turnBased !== curTurn ||
+        !!r.teams !== curTeams ||
+        (r.entry === "bombu") !== curBombu)
+    ) {
       b.disabled = true;
       b.classList.add("disabled");
       b.title = "Partie déjà commencée — type de jeu non modifiable";
@@ -122,7 +132,7 @@ export function openEditPlayersDialog(game) {
   // Team games keep a fixed roster (no add/remove); games with a configurable
   // target (Contrée) expose the score-target field.
   const applyRoster = () => {
-    if (addBtn) addBtn.style.display = isTeams() ? "none" : "";
+    if (addBtn) addBtn.style.display = fixedCount() ? "none" : "";
     targetField.hidden = !rulesetOf(mode).configurableTarget;
     yamsOptField.hidden = mode !== "yams";
     updateTeamsHint();
@@ -142,7 +152,7 @@ export function openEditPlayersDialog(game) {
   syncModeTabs();
 
   const drawRows = renderPlayerRows(rowsEl, players, {
-    allowRemove: () => !locked && !isTeams(),
+    allowRemove: () => !locked && !fixedCount(),
     placeholder: () => unitOf(mode).placeholder,
     suggestions: () => placePlayerNames(getSelectedPlace(), unitKeyOf(mode)),
   });
@@ -180,6 +190,9 @@ export function openEditPlayersDialog(game) {
     if (def.teams) {
       if (valid.length !== 4)
         return toast("La Contrée se joue à exactement 4 joueurs");
+    } else if (def.fixedPlayers) {
+      if (valid.length !== def.fixedPlayers)
+        return toast(`Le Bombu se joue à exactement ${def.fixedPlayers} joueurs`);
     } else if (valid.length < 2) {
       return toast("Au moins 2 joueurs requis");
     }
@@ -191,7 +204,9 @@ export function openEditPlayersDialog(game) {
     const cur = defFor(g);
     const incompatible =
       g.rounds.length > 0 &&
-      (!!def.turnBased !== !!cur.turnBased || !!def.teams !== !!cur.teams);
+      (!!def.turnBased !== !!cur.turnBased ||
+        !!def.teams !== !!cur.teams ||
+        (def.entry === "bombu") !== (cur.entry === "bombu"));
     const safeMode = incompatible ? g.mode : mode;
     g.mode = safeMode;
     const sdef = rulesetOf(safeMode);

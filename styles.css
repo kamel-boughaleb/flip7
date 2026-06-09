@@ -57,6 +57,11 @@
   --yams-dark: #ab2019; /* darker stop / border */
   --yams-glow: rgba(216, 45, 33, 0.45);
 
+  /* Bombu accent */
+  --bombu: #1375c4; /* lighter gradient stop / base */
+  --bombu-dark: #0f5a97; /* darker stop / border */
+  --bombu-glow: rgba(19, 117, 196, 0.45);
+
   --surface: #eff8f7; /* page bg */
   --card: #ffffff; /* card bg */
 
@@ -1119,6 +1124,11 @@ input:focus {
   border-color: var(--yams-dark);
   box-shadow: 0 2px 12px var(--yams-glow);
 }
+.mode-tab.active[data-mode="bombu"] {
+  background: linear-gradient(135deg, var(--bombu), var(--bombu-dark));
+  border-color: var(--bombu-dark);
+  box-shadow: 0 2px 12px var(--bombu-glow);
+}
 .badge.mode-classic {
   background: linear-gradient(135deg, var(--classic), var(--classic-dark));
   color: #fff;
@@ -1146,6 +1156,45 @@ input:focus {
 .badge.mode-yams {
   background: linear-gradient(135deg, var(--yams), var(--yams-dark));
   color: #fff;
+}
+.badge.mode-bombu {
+  background: linear-gradient(135deg, var(--bombu), var(--bombu-dark));
+  color: #fff;
+}
+
+/* ---------- Bombu ---------- */
+/* Contract picker reuses .yams-missions / .yams-mission; a left accent marks
+   whether the contract gives (positive) or costs (negative) points. */
+.bombu-contract.bombu-neg {
+  border-left: 5px solid var(--coral);
+}
+.bombu-contract.bombu-pos {
+  border-left: 5px solid var(--skyjo);
+}
+.bombu-note {
+  margin: 0 0 0.875rem;
+  font-size: 0.85rem;
+}
+/* Details table: deal number + contract on the left, editable score per player. */
+.bombu-table .bombu-deal {
+  white-space: nowrap;
+}
+.bombu-deal-no {
+  font-weight: 900;
+  color: var(--muted);
+  margin-right: 0.375rem;
+}
+.bombu-deal-contract {
+  font-weight: 700;
+}
+.bombu-cell-input {
+  width: 4rem;
+  text-align: center;
+  margin: 0 auto;
+}
+.bombu-cell-input.chooser {
+  border-color: var(--bombu);
+  box-shadow: 0 0 0 2px var(--bombu-glow);
 }
 
 /* rules page */

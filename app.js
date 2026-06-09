@@ -19,6 +19,7 @@ import "./js/components/score-summary.js"; // registers <app-score-summary>
 import "./js/components/turn-table.js"; // registers <app-turn-table>
 import "./js/components/yams-table.js"; // registers <app-yams-table>
 import "./js/components/score-table.js"; // registers <app-score-table>
+import "./js/components/bombu-table.js"; // registers <app-bombu-table>
 import "./js/components/contree-table.js"; // registers <app-contree-table>
 import {
   RULESETS,
@@ -106,6 +107,7 @@ import { openSetupDialog } from "./js/dialogs/setup.js";
 import { openEditPlayersDialog } from "./js/dialogs/edit-players.js";
 import { buildRoundEntry, openScoresDialog } from "./js/dialogs/scores.js";
 import { buildTurnBar } from "./js/dialogs/turn.js";
+import { buildBombuBar } from "./js/dialogs/bombu.js";
 import { openYamsEditDialog } from "./js/dialogs/yams.js";
 import { celebrateIfNewWinner } from "./js/dialogs/celebrate.js";
 import { endGamePrompt } from "./js/actions.js";
@@ -670,7 +672,9 @@ function renderGame(id) {
     app.appendChild(wrapPanel(summary));
     // Hide score entry once the game is won.
     if (!w) {
-      if (defFor(game).turnBased) {
+      if (defFor(game).entry === "bombu") {
+        app.appendChild(buildBombuBar(game));
+      } else if (defFor(game).turnBased) {
         app.appendChild(buildTurnBar(game));
       } else {
         const hasDraft = !!game.draftRound;
@@ -748,7 +752,9 @@ function renderDetails(id) {
         renderDetails(id),
       ),
     );
-  } else if (defFor(game).turnBased) tableNode = component("app-turn-table");
+  } else if (defFor(game).entry === "bombu")
+    tableNode = component("app-bombu-table");
+  else if (defFor(game).turnBased) tableNode = component("app-turn-table");
   else tableNode = component("app-score-table");
   app.appendChild(wrapPanel(tableNode));
 }

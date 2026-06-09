@@ -81,6 +81,9 @@ export function openSetupDialog(opts = {}) {
   const yamsChanceToggle = modal.querySelector("#yamsChanceToggle");
   const teamsHint = modal.querySelector("#teamsHint");
   const isTeams = () => rulesetOf(mode).teams;
+  // Games with a fixed roster: Contrée (teams, 4) and Bombu (fixedPlayers: 4).
+  const fixedCount = () =>
+    isTeams() ? 4 : rulesetOf(mode).fixedPlayers || 0;
   // Reflect the selected game's wording (players vs teams).
   const applyUnit = () => {
     const u = unitOf(mode);
@@ -102,9 +105,10 @@ export function openSetupDialog(opts = {}) {
   const applyModeLayout = () => {
     targetField.hidden = !rulesetOf(mode).configurableTarget;
     yamsOptField.hidden = mode !== "yams";
-    if (isTeams()) {
-      while (players.length < 4) players.push({ id: uid(), name: "" });
-      if (players.length > 4) players.length = 4;
+    const fc = fixedCount();
+    if (fc) {
+      while (players.length < fc) players.push({ id: uid(), name: "" });
+      if (players.length > fc) players.length = fc;
       addBtn.style.display = "none";
     } else {
       addBtn.style.display = "";
@@ -129,7 +133,7 @@ export function openSetupDialog(opts = {}) {
   syncModeTabs();
 
   const drawRows = renderPlayerRows(rowsEl, players, {
-    allowRemove: () => !isTeams(),
+    allowRemove: () => !fixedCount(),
     placeholder: () => unitOf(mode).placeholder,
     suggestions: () => placePlayerNames(place, unitKeyOf(mode)),
   });
@@ -164,6 +168,9 @@ export function openSetupDialog(opts = {}) {
     if (def.teams) {
       if (valid.length !== 4)
         return toast("La Contrée se joue à exactement 4 joueurs");
+    } else if (def.fixedPlayers) {
+      if (valid.length !== def.fixedPlayers)
+        return toast(`Le Bombu se joue à exactement ${def.fixedPlayers} joueurs`);
     } else if (valid.length < 2) {
       return toast("Ajoutez au moins 2 joueurs");
     }
