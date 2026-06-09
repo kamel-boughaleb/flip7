@@ -2630,6 +2630,7 @@ app-score-summary {
     border-color: rgba(255, 255, 255, 0.22);
   }
   .entry-player {
+    background: #25453f; /* lighter than the modal so rows read as raised */
     border-color: rgba(60, 196, 189, 0.45);
     border-left-color: var(--teal-light);
   }
