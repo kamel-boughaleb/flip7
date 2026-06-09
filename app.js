@@ -106,6 +106,7 @@ import { openSetupDialog } from "./js/dialogs/setup.js";
 import { openEditPlayersDialog } from "./js/dialogs/edit-players.js";
 import { buildRoundEntry, openScoresDialog } from "./js/dialogs/scores.js";
 import { buildTurnBar } from "./js/dialogs/turn.js";
+import { openYamsEditDialog } from "./js/dialogs/yams.js";
 import { celebrateIfNewWinner } from "./js/dialogs/celebrate.js";
 import { endGamePrompt } from "./js/actions.js";
 import {
@@ -739,8 +740,15 @@ function renderDetails(id) {
 
   let tableNode;
   if (defFor(game).teams) tableNode = component("app-contree-table");
-  else if (defFor(game).entry === "yams") tableNode = component("app-yams-table");
-  else if (defFor(game).turnBased) tableNode = component("app-turn-table");
+  else if (defFor(game).entry === "yams") {
+    tableNode = component("app-yams-table");
+    // Tapping a filled cell opens the turn editor (change mission and/or value).
+    tableNode.addEventListener("editturn", (e) =>
+      openYamsEditDialog(getGame(id), e.detail.pid, e.detail.category, () =>
+        renderDetails(id),
+      ),
+    );
+  } else if (defFor(game).turnBased) tableNode = component("app-turn-table");
   else tableNode = component("app-score-table");
   app.appendChild(wrapPanel(tableNode));
 }

@@ -104,7 +104,16 @@ async function fetchGames(place) {
     toast("Erreur de chargement des parties");
     return;
   }
-  GAMES = (data || []).map((r) => r.data).filter(Boolean);
+  const fresh = (data || []).map((r) => r.data).filter(Boolean);
+  // Keep the local (not-yet-confirmed) version of any game still being written,
+  // so this fetch can't revert it to a stale server state mid-save.
+  const dirty = pendingWriteIds();
+  if (dirty.size) {
+    const keep = GAMES.filter((g) => dirty.has(g.id));
+    GAMES = fresh.filter((g) => !dirty.has(g.id)).concat(keep);
+  } else {
+    GAMES = fresh;
+  }
 }
 
 function loadGames() {
@@ -113,32 +122,69 @@ function loadGames() {
 function getGame(id) {
   return GAMES.find((g) => g.id === id);
 }
+
+/* ---------- write serialization ----------
+   Supabase upserts are fire-and-forget, so two concurrent writes to the same
+   row can land out of order — e.g. a debounced draft save overtaking the commit
+   that cleared it, resurrecting stale state (the "scores didn't really send"
+   bug). We keep at most one request in flight per game and always (re)send the
+   latest snapshot, so the server converges to the most recent local state. */
+const writers = new Map(); // game id -> { inFlight: bool, pending: data|null }
+
+// Games with an unconfirmed local write (queued or in flight). fetchGames keeps
+// the local version of these so a poll can't revert the UI to stale server data.
+function pendingWriteIds() {
+  const ids = new Set();
+  writers.forEach((w, id) => {
+    if (w.inFlight || w.pending != null) ids.add(id);
+  });
+  return ids;
+}
+function flushWrite(id) {
+  const w = writers.get(id);
+  if (!w || w.inFlight || w.pending == null) return;
+  const data = w.pending;
+  w.pending = null;
+  w.inFlight = true;
+  db.from("games")
+    .upsert({ id, data })
+    .then(({ error }) => {
+      w.inFlight = false;
+      if (error) {
+        console.error(error);
+        toast("Erreur d'enregistrement");
+      }
+      // A newer state may have queued while this was in flight — send it next.
+      if (w.pending != null) flushWrite(id);
+      else writers.delete(id);
+    });
+}
 function upsertGame(game) {
   const i = GAMES.findIndex((g) => g.id === game.id);
   if (i >= 0) GAMES[i] = game;
   else GAMES.push(game);
   if (!db) return localSave();
-  db.from("games")
-    .upsert({ id: game.id, data: game })
-    .then(({ error }) => {
-      if (error) {
-        console.error(error);
-        toast("Erreur d'enregistrement");
-      }
-    });
+  // Snapshot the state at call time so each queued write carries its own data.
+  const data = JSON.parse(JSON.stringify(game));
+  let w = writers.get(game.id);
+  if (!w) writers.set(game.id, (w = { inFlight: false, pending: null }));
+  w.pending = data; // coalesce: only the latest state needs to reach the server
+  flushWrite(game.id);
 }
-function deleteGame(id) {
+async function deleteGame(id) {
   GAMES = GAMES.filter((g) => g.id !== id);
+  const w = writers.get(id);
+  if (w) w.pending = null; // drop any queued write for this game
   if (!db) return localSave();
-  db.from("games")
-    .delete()
-    .eq("id", id)
-    .then(({ error }) => {
-      if (error) {
-        console.error(error);
-        toast("Erreur de suppression");
-      }
-    });
+  // Wait out an in-flight write so it can't recreate the row after the delete.
+  while (writers.get(id) && writers.get(id).inFlight)
+    await new Promise((r) => setTimeout(r, 50));
+  writers.delete(id);
+  const { error } = await db.from("games").delete().eq("id", id);
+  if (error) {
+    console.error(error);
+    toast("Erreur de suppression");
+  }
 }
 
 const uid = () => Math.random().toString(36).slice(2, 9);
