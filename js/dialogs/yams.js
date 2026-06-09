@@ -21,7 +21,7 @@ import { celebrateIfNewWinner } from "./celebrate.js";
 // score-entry and turn-edit dialogs. Upper section takes a die count (× face),
 // fixed combos show their value, Chance takes the dice sum entered as-is.
 function yamsValueHTML(c, scratched, rawValue) {
-  const scratchBtnHtml = `<button type="button" class="btn btn-ghost btn-sm yams-scratch${scratched ? " active" : ""}" id="scratchBtn"><i class="fa-regular fa-ban"></i> Barrer (0)</button>`;
+  const scratchBtnHtml = `<button type="button" class="btn btn-ghost btn-sm yams-scratch${scratched ? " active" : ""}" id="scratchBtn" title="Barrer (0)" aria-label="Barrer (0)"><i class="fa-regular fa-ban" aria-hidden="true"></i></button>`;
   if (c.free) {
     const hint = "Somme des 5 dés (5 à 30)";
     return `

@@ -87,7 +87,7 @@ const RULESETS = {
    variable ones (Brelan, Carré, Chance). Any mission can be "barrée" (0 pts).
    A stored cell is { category, points }; points 0 means a scratched mission. */
 const YAMS_CATEGORIES = [
-  { key: "ones", label: "As", section: "upper", fixed: null, face: 1 },
+  { key: "ones", label: "Un", section: "upper", fixed: null, face: 1 },
   { key: "twos", label: "Deux", section: "upper", fixed: null, face: 2 },
   { key: "threes", label: "Trois", section: "upper", fixed: null, face: 3 },
   { key: "fours", label: "Quatre", section: "upper", fixed: null, face: 4 },
@@ -512,7 +512,7 @@ function rulesYamsHTML() {
 
     <h3><i class="fa-regular fa-list-check"></i> Les missions</h3>
     <ul>
-      <li><b>Section haute</b> — As, Deux, Trois, Quatre, Cinq, Six : on marque la <b>somme des dés</b> de la valeur choisie.</li>
+      <li><b>Section haute</b> — Un, Deux, Trois, Quatre, Cinq, Six : on marque la <b>somme des dés</b> de la valeur choisie.</li>
       <li><b>Brelan</b> (3 identiques) = <b>25</b> · <b>Carré</b> (4 identiques) = <b>35</b> · <b>Full</b> (brelan + paire) = <b>30</b>.</li>
       <li><b>Petite suite</b> (4 à la suite) = <b>25</b> · <b>Grande suite</b> (5 à la suite) = <b>40</b> · <b>Yam's</b> (5 identiques) = <b>50</b>.</li>
       <li><b>Chance</b> <i>(optionnelle, activée à la création)</i> — on marque la <b>somme des 5 dés</b>, quelle que soit la combinaison (à jouer quand rien d'autre ne paie).</li>
