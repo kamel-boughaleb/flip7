@@ -79,10 +79,10 @@ const RULESETS = {
     },
   },
   bombu: {
-    scoreOrder: "desc", // highest total wins (positives good, negatives = malus)
+    scoreOrder: "asc", // points are penalties → the LOWEST total wins
     entry: "bombu", // bespoke flow: the chooser picks a contract, all 4 score
     fixedPlayers: 4, // Le Barbu is played by exactly 4
-    negatives: true, // most contracts deduct points
+    negatives: true, // Réussite awards negative (good) points
     cellValue(cell) {
       return Number(cell && cell.points) || 0;
     },
@@ -173,19 +173,21 @@ function yamsComplete(game) {
 }
 
 /* ---------- Bombu (Le Barbu) ----------
-   Each deal, the player "in hand" picks one contract among the 7 and may not
-   reuse one they've already chosen; every player plays each contract once, so a
-   full game is 4 × 7 = 28 deals. A stored round is
+   Played with 32 cards. Each deal, the player "in hand" picks one of the 7
+   contracts and may not reuse one they've already chosen; every player plays
+   each contract once, so a full game is 4 × 7 = 28 deals. A stored round is
    { chooser, contract, scores: { [pid]: { points } } } — the chosen contract
-   scores ALL four players (positives are good, the negative contracts deduct). */
+   scores ALL four players. Points are PENALTIES (lowest total wins); only the
+   Réussite awards negative (good) points. `sign` is just a UI accent: "neg" =
+   a penalty contract, "pos" = the rewarding Réussite. */
 const BOMBU_CONTRACTS = [
-  { key: "noTricks", label: "Pas de plis", sign: "neg", note: "−40 par pli ramassé" },
-  { key: "noHearts", label: "Pas de cœurs", sign: "neg", note: "−30 par cœur, −40 l'As ♥" },
-  { key: "noQueens", label: "Pas de dames", sign: "neg", note: "−25 par dame" },
-  { key: "barbu", label: "Barbu (Roi ♥)", sign: "neg", note: "−100 au preneur du Roi ♥" },
-  { key: "salade", label: "Salade", sign: "neg", note: "tous les malus cumulés" },
-  { key: "trumps", label: "Atouts", sign: "pos", note: "+100 par pli remporté" },
-  { key: "domino", label: "Réussite", sign: "pos", note: "+100 / +50 aux premiers à finir" },
+  { key: "noTricks", label: "Pas de plis", sign: "neg", note: "2 pts par pli" },
+  { key: "lastTrick", label: "Dernier pli", sign: "neg", note: "8 pts au dernier pli" },
+  { key: "noQueens", label: "Pas de dames", sign: "neg", note: "2 pts par dame" },
+  { key: "noHearts", label: "Pas de cœurs", sign: "neg", note: "1 pt par cœur" },
+  { key: "barbu", label: "Barbu (Roi ♥)", sign: "neg", note: "8 pts au preneur du Roi ♥" },
+  { key: "reussite", label: "Réussite", sign: "pos", note: "−20 / −10 / −5 / 0 selon l'ordre d'arrivée" },
+  { key: "generale", label: "Générale", sign: "neg", note: "tous les contrats cumulés (≈ 40 pts)" },
 ];
 function bombuContract(key) {
   return BOMBU_CONTRACTS.find((c) => c.key === key) || null;
@@ -589,28 +591,28 @@ function rulesYamsHTML() {
 
 function rulesBombuHTML() {
   return `
-    <p class="rules-intro">Le <b>Bombu</b> (Le Barbu) est un jeu de <b>levées à contrats</b> à <b>4 joueurs</b> (jeu de 52 cartes, 13 chacun). À chaque manche, le joueur <b>en main</b> choisit un <b>contrat</b> ; chacun doit réaliser <b>les 7 contrats une fois</b> (soit <b>28 manches</b>). Le plus haut total l'emporte.</p>
+    <p class="rules-intro">Le <b>Bombu</b> (Le Barbu) est un jeu de <b>levées à contrats</b> à <b>4 joueurs</b> avec <b>32 cartes</b> (8 chacun). À chaque manche, le joueur <b>en main</b> choisit un <b>contrat</b> ; chacun doit réaliser <b>les 7 contrats une fois</b> (soit <b>28 manches</b>). Les points sont des <b>pénalités</b> : le <b>plus petit total</b> l'emporte.</p>
 
-    <h3><i class="fa-regular fa-circle-minus"></i> Les 5 contrats négatifs</h3>
+    <h3><i class="fa-regular fa-circle-minus"></i> Les contrats à éviter (pénalités)</h3>
     <ul>
-      <li><b>Pas de plis</b> — chaque pli ramassé : <b>−40</b>.</li>
-      <li><b>Pas de cœurs</b> — chaque cœur : <b>−30</b> (l'<b>As ♥</b> : −40). Interdit d'entamer cœur tant qu'on a une autre couleur.</li>
-      <li><b>Pas de dames</b> — chaque dame : <b>−25</b> ; la manche s'arrête dès les 4 dames tombées.</li>
-      <li><b>Barbu</b> — le preneur du <b>Roi ♥</b> : <b>−100</b> ; la manche s'arrête dès sa capture.</li>
-      <li><b>Salade</b> — <b>tous les malus ci-dessus cumulés</b> en même temps.</li>
+      <li><b>Pas de plis</b> — <b>2 points par pli</b> ramassé.</li>
+      <li><b>Dernier pli</b> — <b>8 points</b> à qui remporte le dernier pli.</li>
+      <li><b>Pas de dames</b> — <b>2 points par dame</b> ramassée.</li>
+      <li><b>Pas de cœurs</b> — <b>1 point par cœur</b> ramassé.</li>
+      <li><b>Barbu</b> — <b>8 points</b> au preneur du <b>Roi ♥</b>.</li>
+      <li><b>Générale</b> — <b>tous les contrats ci-dessus cumulés</b> dans la même manche (≈ 40 points en jeu).</li>
     </ul>
 
-    <h3><i class="fa-regular fa-circle-plus"></i> Les 2 contrats positifs</h3>
+    <h3><i class="fa-regular fa-circle-plus"></i> Le contrat qui rapporte</h3>
     <ul>
-      <li><b>Atouts</b> — le choisisseur désigne une couleur d'atout ; chaque pli remporté : <b>+100</b>.</li>
-      <li><b>Réussite</b> (Domino) — on pose les cartes à la suite ; <b>+100</b> au premier qui se débarrasse de sa main, <b>+50</b> au deuxième.</li>
+      <li><b>Réussite</b> — on pose les cartes à la suite ; selon l'ordre où l'on se débarrasse de sa main : <b>−20</b> (1er), <b>−10</b> (2e), <b>−5</b> (3e), <b>0</b> (4e). Des points <b>négatifs</b>, donc bons à prendre.</li>
     </ul>
 
     <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
     <ul>
       <li>Au démarrage, choisissez <b>qui commence</b> ; le choix du contrat tourne ensuite <b>dans l'ordre des joueurs</b>.</li>
-      <li>À chaque manche, le joueur en main <b>choisit un contrat</b> (parmi ceux qu'il n'a pas encore pris), puis vous <b>saisissez le score de chaque joueur</b> pour la manche (valeurs négatives possibles).</li>
-      <li>La partie se <b>termine d'elle-même</b> une fois que les 4 joueurs ont joué leurs 7 contrats ; le joueur au plus haut total est couronné.</li>
+      <li>À chaque manche, le joueur en main <b>choisit un contrat</b> (parmi ceux qu'il n'a pas encore pris), puis vous <b>saisissez le score de chaque joueur</b> (négatif possible pour la Réussite).</li>
+      <li>La partie se <b>termine d'elle-même</b> une fois que les 4 joueurs ont joué leurs 7 contrats ; le joueur au <b>plus petit total</b> est couronné.</li>
     </ul>`;
 }
 
