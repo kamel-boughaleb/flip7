@@ -95,70 +95,20 @@ function openBombuDialog(game) {
   const modal = el(`<div class="modal modal-scores"></div>`);
   overlay.appendChild(modal);
 
+  // Two steps: 1 = pick the contract, 2 = enter the four scores. Resume on
+  // step 2 if a contract was already drafted.
+  let step = selKey ? 2 : 1;
+
   modal.innerHTML = `
     <div class="rules-dialog-head">
-      <h3>Manche ${turnNo} — ${esc(chooser.name)}</h3>
+      <h3 id="bombuTitle"></h3>
       <button class="modal-close" data-act="close" aria-label="Fermer"><i class="fa-regular fa-xmark"></i></button>
     </div>
-    <div class="scores-dialog-body">
-      <div class="turn-meta">Contrat choisi par <b>${esc(chooser.name)}</b></div>
-      <div class="yams-missions" id="bombuContracts"></div>
-      <div class="bombu-note muted" id="bombuNote" hidden></div>
-      <div class="entry-grid" id="bombuScores"></div>
-    </div>
-    <div class="scores-dialog-foot">
-      <div class="spacer"></div>
-      <button class="btn btn-ghost" data-act="close">Annuler</button>
-      <button class="btn btn-primary" id="saveBombu">Enregistrer</button>
-    </div>`;
-
-  const contractsEl = modal.querySelector("#bombuContracts");
-  const noteEl = modal.querySelector("#bombuNote");
-  const scoresEl = modal.querySelector("#bombuScores");
-
-  // Contract picker: taken contracts are disabled; the rest are selectable.
-  BOMBU_CONTRACTS.forEach((c) => {
-    const done = taken.has(c.key);
-    const btn = el(
-      `<button type="button" class="yams-mission yams-lower bombu-contract bombu-${c.sign}${done ? " filled" : ""}" data-key="${c.key}"${done ? " disabled" : ""}><span class="yams-mission-name">${esc(c.label)}</span></button>`,
-    );
-    if (!done)
-      btn.addEventListener("click", () => {
-        selKey = c.key;
-        syncSel();
-        writeDraft();
-      });
-    contractsEl.appendChild(btn);
-  });
-
-  const syncSel = () => {
-    contractsEl
-      .querySelectorAll(".bombu-contract")
-      .forEach((b) => b.classList.toggle("active", b.dataset.key === selKey));
-    const c = bombuContract(selKey);
-    noteEl.hidden = !c;
-    if (c) noteEl.textContent = c.note;
-  };
-
-  // One score input per player (negatives allowed for the malus contracts).
-  game.players.forEach((p) => {
-    const row = el(`
-      <div class="entry-player">
-        <span class="pname">${esc(p.name)}</span>
-        <div class="entry-controls">
-          <input type="number" inputmode="numeric" class="cell-input" data-pid="${p.id}" placeholder="0" value="${esc(vals[p.id])}" />
-        </div>
-      </div>`);
-    const input = row.querySelector("input");
-    input.addEventListener("input", () => {
-      vals[p.id] = input.value;
-      writeDraft();
-    });
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") save();
-    });
-    scoresEl.appendChild(row);
-  });
+    <div class="scores-dialog-body" id="bombuBody"></div>
+    <div class="scores-dialog-foot" id="bombuFoot"></div>`;
+  const titleEl = modal.querySelector("#bombuTitle");
+  const bodyEl = modal.querySelector("#bombuBody");
+  const footEl = modal.querySelector("#bombuFoot");
 
   const writeDraft = () => {
     const g = getGame(game.id);
@@ -166,15 +116,108 @@ function openBombuDialog(game) {
     upsertGame(g);
   };
 
+  // Step 1 — contract picker (taken contracts disabled).
+  function renderPick() {
+    titleEl.textContent = `Manche ${turnNo} — ${chooser.name}`;
+    bodyEl.innerHTML = `
+      <div class="turn-meta"><b>${esc(chooser.name)}</b> choisit le contrat</div>
+      <div class="yams-missions" id="bombuContracts"></div>
+      <div class="bombu-note muted" id="bombuNote" hidden></div>`;
+    footEl.innerHTML = `
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-act="close">Annuler</button>
+      <button class="btn btn-primary" id="bombuNext"${selKey ? "" : " disabled"}>Suivant</button>`;
+    const contractsEl = bodyEl.querySelector("#bombuContracts");
+    const noteEl = bodyEl.querySelector("#bombuNote");
+    const nextBtn = footEl.querySelector("#bombuNext");
+    const syncSel = () => {
+      contractsEl
+        .querySelectorAll(".bombu-contract")
+        .forEach((b) => b.classList.toggle("active", b.dataset.key === selKey));
+      const c = bombuContract(selKey);
+      noteEl.hidden = !c;
+      if (c) noteEl.textContent = c.note;
+      nextBtn.disabled = !selKey;
+    };
+    BOMBU_CONTRACTS.forEach((c) => {
+      const done = taken.has(c.key);
+      const btn = el(
+        `<button type="button" class="yams-mission yams-lower bombu-contract bombu-${c.sign}${done ? " filled" : ""}" data-key="${c.key}"${done ? " disabled" : ""}><span class="yams-mission-name">${esc(c.label)}</span></button>`,
+      );
+      if (!done)
+        btn.addEventListener("click", () => {
+          selKey = c.key;
+          syncSel();
+          writeDraft();
+        });
+      contractsEl.appendChild(btn);
+    });
+    syncSel();
+    nextBtn.addEventListener("click", () => {
+      if (!selKey) return toast("Choisissez un contrat");
+      step = 2;
+      render();
+    });
+    wireClose();
+  }
+
+  // Step 2 — one score input per player (negatives allowed for the Réussite).
+  function renderScores() {
+    const c = bombuContract(selKey);
+    titleEl.textContent = `Manche ${turnNo} — ${c ? c.label : ""}`;
+    bodyEl.innerHTML = `
+      <div class="turn-meta">${esc(c ? c.label : "")}${c ? ` · <span class="muted">${esc(c.note)}</span>` : ""}</div>
+      <div class="entry-grid" id="bombuScores"></div>`;
+    footEl.innerHTML = `
+      <button class="btn btn-ghost" id="bombuBack"><i class="fa-regular fa-arrow-left"></i> Contrat</button>
+      <div class="spacer"></div>
+      <button class="btn btn-primary" id="saveBombu">Enregistrer</button>`;
+    const scoresEl = bodyEl.querySelector("#bombuScores");
+    game.players.forEach((p) => {
+      const row = el(`
+        <div class="entry-player">
+          <span class="pname">${esc(p.name)}</span>
+          <div class="entry-controls">
+            <input type="number" inputmode="numeric" class="cell-input" data-pid="${p.id}" placeholder="0" value="${esc(vals[p.id])}" />
+          </div>
+        </div>`);
+      const input = row.querySelector("input");
+      input.addEventListener("input", () => {
+        vals[p.id] = input.value;
+        writeDraft();
+      });
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") save();
+      });
+      scoresEl.appendChild(row);
+    });
+    footEl.querySelector("#bombuBack").addEventListener("click", () => {
+      step = 1;
+      render();
+    });
+    footEl.querySelector("#saveBombu").addEventListener("click", save);
+    wireClose();
+    const first = scoresEl.querySelector("input");
+    if (first) first.focus();
+  }
+
+  const render = () => (step === 2 ? renderScores() : renderPick());
+
   const closeKeepingDraft = () => {
     writeDraft();
     overlay.remove();
     if (currentRoute().name === "game" && currentRoute().id === game.id)
       go("game", { id: game.id });
   };
+  // The header ✕ persists across steps — bind it once. The footer "Annuler" is
+  // rebuilt each render, so wireClose re-binds only that one.
   modal
-    .querySelectorAll("[data-act=close]")
-    .forEach((b) => b.addEventListener("click", closeKeepingDraft));
+    .querySelector(".rules-dialog-head [data-act=close]")
+    .addEventListener("click", closeKeepingDraft);
+  const wireClose = () =>
+    footEl
+      .querySelectorAll("[data-act=close]")
+      .forEach((b) => b.addEventListener("click", closeKeepingDraft));
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) closeKeepingDraft();
   });
@@ -196,9 +239,8 @@ function openBombuDialog(game) {
     go("game", { id: game.id });
     celebrateIfNewWinner(before, g);
   };
-  modal.querySelector("#saveBombu").addEventListener("click", save);
 
-  syncSel();
+  render();
   root.appendChild(overlay);
 }
 
