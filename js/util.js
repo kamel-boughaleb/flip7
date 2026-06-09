@@ -57,9 +57,13 @@ export function toast(msg) {
   setTimeout(() => t.remove(), 1800);
 }
 
-// Brand logo (home hero / setup header).
+// Brand logo (home hero / setup header). The white variant is swapped in on
+// dark backgrounds via <picture>'s prefers-color-scheme source.
 export function logoMarkup() {
-  return `<div class="brand-logo"><img src="img/logo_color.svg" alt="Kigagne ?" /></div>`;
+  return `<div class="brand-logo"><picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/logo_white.svg" />
+      <img src="img/logo_color.svg" alt="Kigagne ?" />
+    </picture></div>`;
 }
 
 // Confetti burst inside a positioned container.
