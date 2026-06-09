@@ -78,6 +78,19 @@ const RULESETS = {
       return yamsUpperBonus(game, playerId);
     },
   },
+  bombu: {
+    scoreOrder: "desc", // highest total wins (positives good, negatives = malus)
+    entry: "bombu", // bespoke flow: the chooser picks a contract, all 4 score
+    fixedPlayers: 4, // Le Barbu is played by exactly 4
+    negatives: true, // most contracts deduct points
+    cellValue(cell) {
+      return Number(cell && cell.points) || 0;
+    },
+    // Ends once every player has played all 7 contracts (4 × 7 = 28 deals).
+    complete(game) {
+      return bombuComplete(game);
+    },
+  },
 };
 
 /* ---------- Yams scorecard ----------
@@ -159,6 +172,42 @@ function yamsComplete(game) {
   );
 }
 
+/* ---------- Bombu (Le Barbu) ----------
+   Each deal, the player "in hand" picks one contract among the 7 and may not
+   reuse one they've already chosen; every player plays each contract once, so a
+   full game is 4 × 7 = 28 deals. A stored round is
+   { chooser, contract, scores: { [pid]: { points } } } — the chosen contract
+   scores ALL four players (positives are good, the negative contracts deduct). */
+const BOMBU_CONTRACTS = [
+  { key: "noTricks", label: "Pas de plis", sign: "neg", note: "−40 par pli ramassé" },
+  { key: "noHearts", label: "Pas de cœurs", sign: "neg", note: "−30 par cœur, −40 l'As ♥" },
+  { key: "noQueens", label: "Pas de dames", sign: "neg", note: "−25 par dame" },
+  { key: "barbu", label: "Barbu (Roi ♥)", sign: "neg", note: "−100 au preneur du Roi ♥" },
+  { key: "salade", label: "Salade", sign: "neg", note: "tous les malus cumulés" },
+  { key: "trumps", label: "Atouts", sign: "pos", note: "+100 par pli remporté" },
+  { key: "domino", label: "Réussite", sign: "pos", note: "+100 / +50 aux premiers à finir" },
+];
+function bombuContract(key) {
+  return BOMBU_CONTRACTS.find((c) => c.key === key) || null;
+}
+// Contracts a player has already chosen (as the deal's chooser).
+function bombuTaken(game, playerId) {
+  const s = new Set();
+  game.rounds.forEach((r) => {
+    if (r.chooser === playerId && r.contract) s.add(r.contract);
+  });
+  return s;
+}
+// Every player has chosen all 7 contracts → the game is over.
+function bombuComplete(game) {
+  return (
+    game.players.length > 0 &&
+    game.players.every(
+      (p) => bombuTaken(game, p.id).size >= BOMBU_CONTRACTS.length,
+    )
+  );
+}
+
 // Trump suits for Contrée bids (4 colours, icons via Unicode pips).
 const CONTREE_SUITS = [
   { key: "spades", label: "Pique", sym: "♠", red: false },
@@ -219,6 +268,11 @@ const MODES = {
     label: "Yam's",
     ruleset: "yams",
     rules: () => rulesYamsHTML(),
+  },
+  bombu: {
+    label: "Bombu",
+    ruleset: "bombu",
+    rules: () => rulesBombuHTML(),
   },
 };
 const DEFAULT_MODE = "classic";
@@ -533,6 +587,33 @@ function rulesYamsHTML() {
     </ul>`;
 }
 
+function rulesBombuHTML() {
+  return `
+    <p class="rules-intro">Le <b>Bombu</b> (Le Barbu) est un jeu de <b>levées à contrats</b> à <b>4 joueurs</b> (jeu de 52 cartes, 13 chacun). À chaque manche, le joueur <b>en main</b> choisit un <b>contrat</b> ; chacun doit réaliser <b>les 7 contrats une fois</b> (soit <b>28 manches</b>). Le plus haut total l'emporte.</p>
+
+    <h3><i class="fa-regular fa-circle-minus"></i> Les 5 contrats négatifs</h3>
+    <ul>
+      <li><b>Pas de plis</b> — chaque pli ramassé : <b>−40</b>.</li>
+      <li><b>Pas de cœurs</b> — chaque cœur : <b>−30</b> (l'<b>As ♥</b> : −40). Interdit d'entamer cœur tant qu'on a une autre couleur.</li>
+      <li><b>Pas de dames</b> — chaque dame : <b>−25</b> ; la manche s'arrête dès les 4 dames tombées.</li>
+      <li><b>Barbu</b> — le preneur du <b>Roi ♥</b> : <b>−100</b> ; la manche s'arrête dès sa capture.</li>
+      <li><b>Salade</b> — <b>tous les malus ci-dessus cumulés</b> en même temps.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-circle-plus"></i> Les 2 contrats positifs</h3>
+    <ul>
+      <li><b>Atouts</b> — le choisisseur désigne une couleur d'atout ; chaque pli remporté : <b>+100</b>.</li>
+      <li><b>Réussite</b> (Domino) — on pose les cartes à la suite ; <b>+100</b> au premier qui se débarrasse de sa main, <b>+50</b> au deuxième.</li>
+    </ul>
+
+    <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
+    <ul>
+      <li>Au démarrage, choisissez <b>qui commence</b> ; le choix du contrat tourne ensuite <b>dans l'ordre des joueurs</b>.</li>
+      <li>À chaque manche, le joueur en main <b>choisit un contrat</b> (parmi ceux qu'il n'a pas encore pris), puis vous <b>saisissez le score de chaque joueur</b> pour la manche (valeurs négatives possibles).</li>
+      <li>La partie se <b>termine d'elle-même</b> une fois que les 4 joueurs ont joué leurs 7 contrats ; le joueur au plus haut total est couronné.</li>
+    </ul>`;
+}
+
 export {
   RULESETS,
   YAMS_CATEGORIES,
@@ -547,6 +628,10 @@ export {
   yamsUpperSum,
   yamsUpperBonus,
   yamsComplete,
+  BOMBU_CONTRACTS,
+  bombuContract,
+  bombuTaken,
+  bombuComplete,
   CONTREE_SUITS,
   contreeSuit,
   UNITS,

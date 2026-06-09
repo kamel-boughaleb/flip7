@@ -76,6 +76,7 @@ function isGameOver(game, s) {
   const def = defFor(game);
   if (def.manualEnd) return !!game.ended; // user closes the game by hand
   if (def.autoEndFilled) return yamsComplete(game); // Yams: every card filled
+  if (def.complete) return def.complete(game); // Bombu: every contract played
   if (def.rounds) return game.rounds.length >= def.rounds;
   return s.some((p) => p.total >= game.target);
 }
@@ -141,6 +142,14 @@ function currentPlayer(game) {
   }
   return null; // everyone is done
 }
+// Bombu: the player choosing the current deal's contract. The chosen starter is
+// rotated by the number of deals already played (choice passes in roster order).
+function bombuChooser(game) {
+  if (!game.starter) return null;
+  const order = turnOrder(game);
+  return order.length ? order[game.rounds.length % order.length] : null;
+}
+
 // Noun for the scoring unit: "donne" (Contrée), "tour" (turn-based), else
 // "manche".
 function roundNoun(game) {
@@ -162,6 +171,8 @@ function roundNumberLabel(game, n) {
 function roundNoteFor(game) {
   const def = defFor(game);
   if (def.teams) return game.dealer ? `Donne ${game.rounds.length + 1}` : "À démarrer";
+  if (def.entry === "bombu")
+    return game.starter ? `Manche ${game.rounds.length + 1}` : "À démarrer";
   if (!def.turnBased) return `Manche ${game.rounds.length + 1}`;
   if (!game.starter) return "À démarrer";
   const cur = currentPlayer(game);
@@ -224,6 +235,6 @@ function gameDuration(game) {
 export {
   playerTotal, standings, teamsOf, teamName, teamTotal, currentDealer,
   isGameOver, winnersFromStandings, winners, winnersLabel, winner,
-  turnOrder, currentPlayer, roundNoun, roundCountLabel, roundNumberLabel,
+  turnOrder, currentPlayer, bombuChooser, roundNoun, roundCountLabel, roundNumberLabel,
   roundNoteFor, rankLabels, gameDuration, turnDraftHasData, contreeBidHTML,
 };
