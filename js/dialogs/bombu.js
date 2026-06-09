@@ -142,7 +142,7 @@ function openBombuDialog(game) {
     BOMBU_CONTRACTS.forEach((c) => {
       const done = taken.has(c.key);
       const btn = el(
-        `<button type="button" class="yams-mission yams-lower bombu-contract bombu-${c.sign}${done ? " filled" : ""}" data-key="${c.key}"${done ? " disabled" : ""}><span class="yams-mission-name">${esc(c.label)}</span></button>`,
+        `<button type="button" class="yams-mission yams-lower bombu-contract${done ? " filled" : ""}" data-key="${c.key}"${done ? " disabled" : ""}><span class="yams-mission-name">${esc(c.label)}</span><span class="yams-fixed">${esc(c.badge)}</span></button>`,
       );
       if (!done)
         btn.addEventListener("click", () => {

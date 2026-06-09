@@ -181,13 +181,13 @@ function yamsComplete(game) {
    Réussite awards negative (good) points. `sign` is just a UI accent: "neg" =
    a penalty contract, "pos" = the rewarding Réussite. */
 const BOMBU_CONTRACTS = [
-  { key: "noTricks", label: "Pas de plis", sign: "neg", note: "2 pts par pli" },
-  { key: "lastTrick", label: "Dernier pli", sign: "neg", note: "8 pts au dernier pli" },
-  { key: "noQueens", label: "Pas de dames", sign: "neg", note: "2 pts par dame" },
-  { key: "noHearts", label: "Pas de cœurs", sign: "neg", note: "1 pt par cœur" },
-  { key: "barbu", label: "Barbu (Roi ♥)", sign: "neg", note: "8 pts au preneur du Roi ♥" },
-  { key: "reussite", label: "Réussite", sign: "pos", note: "−20 / −10 / −5 / 0 selon l'ordre d'arrivée" },
-  { key: "generale", label: "Générale", sign: "neg", note: "tous les contrats cumulés (≈ 40 pts)" },
+  { key: "noTricks", label: "Pas de plis", sign: "neg", badge: "2 /pli", note: "2 pts par pli" },
+  { key: "lastTrick", label: "Dernier pli", sign: "neg", badge: "8", note: "8 pts au dernier pli" },
+  { key: "noQueens", label: "Pas de dames", sign: "neg", badge: "2 /dame", note: "2 pts par dame" },
+  { key: "noHearts", label: "Pas de cœurs", sign: "neg", badge: "1 /cœur", note: "1 pt par cœur" },
+  { key: "barbu", label: "Barbu (Roi ♥)", sign: "neg", badge: "8", note: "8 pts au preneur du Roi ♥" },
+  { key: "reussite", label: "Réussite", sign: "pos", badge: "−20 à 0", note: "−20 / −10 / −5 / 0 selon l'ordre d'arrivée" },
+  { key: "generale", label: "Générale", sign: "neg", badge: "≈ 40", note: "tous les contrats cumulés (≈ 40 pts)" },
 ];
 function bombuContract(key) {
   return BOMBU_CONTRACTS.find((c) => c.key === key) || null;

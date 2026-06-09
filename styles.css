@@ -1163,14 +1163,8 @@ input:focus {
 }
 
 /* ---------- Bombu ---------- */
-/* Contract picker reuses .yams-missions / .yams-mission; a left accent marks
-   whether the contract gives (positive) or costs (negative) points. */
-.bombu-contract.bombu-neg {
-  border-left: 5px solid var(--coral);
-}
-.bombu-contract.bombu-pos {
-  border-left: 5px solid var(--skyjo);
-}
+/* Contract picker reuses .yams-missions / .yams-mission; each contract shows its
+   score in a badge (.yams-fixed), like the Yam's missions. */
 .bombu-note {
   margin: 0 0 0.875rem;
   font-size: 0.85rem;
