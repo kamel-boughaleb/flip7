@@ -2881,6 +2881,21 @@ app-score-summary {
     --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.45);
   }
 
+  /* On dark, the gold/silver/bronze chips (and the gold victory banner) read
+     better with a dark number/text than white. Light mode keeps white. */
+  .badge.rank1 {
+    color: #473d14;
+  }
+  .badge.rank2 {
+    color: #4f4f5a;
+  }
+  .badge.rank3 {
+    color: #58401a;
+  }
+  .banner {
+    color: #473d14;
+  }
+
   /* Shadows barely show on dark, so elevated surfaces get a hairline border to
      stand out from the page. The cards keep their coloured left accent. */
   .game-card {
