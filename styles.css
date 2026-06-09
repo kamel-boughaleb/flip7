@@ -2593,30 +2593,50 @@ app-score-summary {
    of hardcoded-light spots are patched below. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --surface: #0f1f1d; /* page background */
-    --card: #18302d; /* cards / panels */
-    --cream: #1d3835; /* "cream" surfaces: inputs, pills */
-    --teal-bg: #163330; /* teal tint: subtotal rows, badges */
+    --surface: #0c1a18; /* page background (darkest) */
+    --card: #18322e; /* cards / panels — a clear step above the page */
+    --cream: #22423d; /* "cream" surfaces: inputs, pills — lighter, they pop */
+    --teal-bg: #163330; /* subtle teal tint: subtotal rows, badges */
 
-    --text: #e8f4f2;
-    --muted: #93b3af;
-    --teal-dark: #52cfc8; /* dark-text accent → bright so it reads on dark */
+    --text: #e9f5f3;
+    --muted: #9bb7b3;
+    --teal-dark: #54d1ca; /* dark-text accent → bright so it reads on dark */
 
     /* deeper shadows for separation against the dark background */
     --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.5);
-    --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.55);
+    --shadow-lg: 0 6px 24px rgba(0, 0, 0, 0.6);
     --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.45);
   }
 
-  /* Hardcoded-light spots that don't read from the variables above. */
+  /* Shadows barely show on dark, so elevated surfaces get a hairline border to
+     stand out from the page. The cards keep their coloured left accent. */
+  .game-card {
+    border-top: 1px solid rgba(255, 255, 255, 0.09);
+    border-right: 1px solid rgba(255, 255, 255, 0.09);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  }
+  .panel,
+  .modal {
+    border: 1px solid rgba(255, 255, 255, 0.09);
+  }
+  /* Stronger dim behind dialogs so the modal reads as a distinct layer. */
+  .overlay {
+    background: rgba(0, 0, 0, 0.6);
+  }
+  /* Inputs and entry rows need visibly lighter borders on dark surfaces. */
+  input[type="text"],
+  input[type="number"] {
+    border-color: rgba(255, 255, 255, 0.22);
+  }
+  .entry-player {
+    border-color: rgba(60, 196, 189, 0.45);
+    border-left-color: var(--teal-light);
+  }
+  /* Hardcoded-light topbar background. */
   .topbar {
     background: rgba(20, 40, 37, 0.72);
     border-bottom-color: rgba(60, 196, 189, 0.25);
-  }
-  input[type="text"],
-  input[type="number"] {
-    border-color: rgba(255, 255, 255, 0.14);
   }
   /* Contrée: "black" suits use --ink (dark) — flip them light on dark cards. */
   .suit,
