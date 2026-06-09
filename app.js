@@ -175,9 +175,9 @@ function updatePlaceBtn() {
   updateTitle(place);
 }
 
-// Document title reflects the current place: "[Lieu] | Compteur de score".
+// Document title reflects the current place: "[Lieu] | Kigagne ?".
 function updateTitle(place) {
-  const base = "Compteur de score";
+  const base = "Kigagne ?";
   document.title =
     place !== null && currentRoute().name !== "place"
       ? `${placeLabel(place)} | ${base}`

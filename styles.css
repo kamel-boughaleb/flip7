@@ -4,6 +4,7 @@
    Borders, box-shadows, letter-spacing and animation transforms stay in px. */
 
 :root {
+  color-scheme: light dark; /* let the OS theme native controls/scrollbars */
   /* ---- palette ---- */
   --teal: #2ba8a2;
   --teal-light: #3cc4bd;
@@ -128,39 +129,21 @@ body {
   background: rgba(255, 248, 231, 0.7);
   backdrop-filter: blur(6px);
 }
-/* compact FLIP7 wordmark in the bar */
+/* brand logo in the bar */
 .logo {
   display: inline-flex;
   align-items: center;
   margin: 0;
   cursor: pointer;
-  background: var(--cream);
-  border: 2px solid var(--ink);
-  border-radius: var(--r-md);
-  padding: 0.25rem 0.75rem;
-  transform: skewX(-6deg) rotate(-2deg);
-  box-shadow: var(--shadow-sm);
   transition: transform 0.15s var(--bounce);
 }
 .logo:hover {
-  transform: skewX(-6deg) rotate(-2deg) scale(1.04);
+  transform: scale(1.04);
 }
-.logo .lf {
-  transform: skewX(6deg);
-  font-weight: 800;
-  font-size: 1.5rem;
-  letter-spacing: 2px;
-  color: var(--teal-dark);
-}
-.logo .l7 {
-  transform: skewX(6deg) rotate(5deg);
-  font-weight: 800;
-  font-size: 1.875rem;
-  margin-left: 0.25rem;
-  color: var(--gold);
-  text-shadow:
-    1px 1px 0 var(--ink),
-    2px 2px 0 var(--ink);
+.logo img {
+  height: 2.25rem;
+  width: auto;
+  display: block;
 }
 .tagline {
   display: none;
@@ -207,9 +190,8 @@ main > * {
   width: 100%;
 }
 
-/* The fanned-cards logo needs its own top padding to make room for the fan;
-   keep it out of the first-child reset. */
-main > *:first-child:not(.flip7-logo) {
+/* The hero brand logo keeps its own top padding; out of the first-child reset. */
+main > *:first-child:not(.brand-logo) {
   padding-top: 0px;
 }
 
@@ -236,118 +218,15 @@ h3 {
   border-bottom: 3px dashed rgba(43, 168, 162, 0.3);
 }
 
-/* ---------- big FLIP7 logo (hero / setup) ---------- */
-.flip7-logo {
-  position: relative;
+/* ---------- brand logo (hero / setup) ---------- */
+.brand-logo {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1rem 0.5rem;
-  padding: 1.875rem 0 0.625rem;
+  justify-content: center;
   user-select: none;
 }
-.flip7-logo .fan {
-  position: absolute;
-  top: 0.875rem;
-  left: 50%;
-  width: 0;
-  height: 0;
-}
-.flip7-logo .fan span {
-  position: absolute;
-  width: 3.25rem;
-  height: 4.625rem;
-  margin-left: -1.625rem;
-  margin-top: -0.625rem;
-  border-radius: 0.5rem;
-  border: 3px solid var(--ink);
-  box-shadow: var(--shadow-md);
-  transform-origin: 50% 90%;
-}
-.fan .c1 {
-  transform: rotate(-24deg);
-  background: var(--coral);
-}
-.fan .c2 {
-  transform: rotate(-12deg);
-  background: var(--gold);
-}
-.fan .c3 {
-  transform: rotate(0deg);
-  background: var(--cream);
-}
-.fan .c4 {
-  transform: rotate(12deg);
-  background: var(--sky);
-}
-.fan .c5 {
-  transform: rotate(24deg);
-  background: var(--teal);
-}
-
-.flip7-logo .logo-text {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  gap: 1rem 0.5rem;
-  padding: 0.5rem 1rem;
-  background: var(--cream);
-  border: 3px solid var(--ink);
-  border-radius: var(--r-md);
-  transform: skewX(-6deg) rotate(-3deg);
-  box-shadow: var(--shadow-md);
-}
-.flip7-logo .logo-text .flip {
-  transform: skewX(6deg);
-  font-size: 2.75rem;
-  font-weight: 800;
-  letter-spacing: 2px;
-  color: var(--teal-dark);
-  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.12);
-}
-.flip7-logo .logo-text .seven {
-  transform: skewX(6deg) rotate(5deg);
-  font-size: 4.75rem;
-  font-weight: 800;
-  line-height: 0.8;
-  color: var(--gold);
-  text-shadow:
-    1px 1px 0 var(--ink),
-    2px 2px 0 var(--ink),
-    3px 3px 0 var(--ink);
-}
-/* folded-ribbon banner */
-.flip7-logo .ribbon {
-  position: relative;
-  z-index: 1;
-  background: var(--cream);
-  border: 3px solid var(--ink);
-  border-radius: 0.375rem;
-  padding: 0.5rem 1rem;
-  font-weight: 800;
-  font-size: 0.875rem;
-  letter-spacing: 4px;
-  color: var(--teal-dark);
-}
-.flip7-logo .ribbon::before,
-.flip7-logo .ribbon::after {
-  content: "";
-  position: absolute;
-  top: 0.5rem;
-  width: 1.375rem;
-  height: 70%;
-  background: var(--gold-dark);
-  border: 3px solid var(--ink);
-  z-index: -1;
-}
-.flip7-logo .ribbon::before {
-  left: -1rem;
-  transform: skewY(20deg);
-}
-.flip7-logo .ribbon::after {
-  right: -1rem;
-  transform: skewY(-20deg);
+.brand-logo img {
+  width: min(20rem, 70vw);
+  height: auto;
 }
 
 /* ---------- buttons ---------- */
@@ -1961,6 +1840,20 @@ tfoot td .btn-icon {
   align-items: center;
   gap: 1rem 0.5rem;
 }
+/* Action buttons show their text label; the icon is a compact fallback swapped
+   in on very narrow screens (≤400px) so the row stays on one line. */
+.entry-controls .btn-ico {
+  display: none;
+}
+@media (max-width: 400px) {
+  .entry-controls .btn-label {
+    display: none;
+  }
+  .entry-controls .btn-ico {
+    display: inline-block;
+    font-size: 0.95rem;
+  }
+}
 
 /* ± sign toggle for games that allow negative scores (Skyjo) */
 .sign-btn {
@@ -2455,14 +2348,8 @@ body:has(.overlay) {
     gap: 1rem 0.5rem;
     flex-wrap: wrap;
   }
-  .logo {
-    padding: 0.25rem 0.625rem;
-  }
-  .logo .lf {
-    font-size: 1.25rem;
-  }
-  .logo .l7 {
-    font-size: 1.625rem;
+  .logo img {
+    height: 1.875rem;
   }
   .tagline {
     font-size: 0.75rem;
@@ -2478,27 +2365,6 @@ body:has(.overlay) {
   }
   .hero p {
     font-size: 0.875rem;
-  }
-  .flip7-logo {
-    padding: 1.375rem 0 0.5rem;
-  }
-  .flip7-logo .logo-text {
-    padding: 0.375rem 1.125rem;
-  }
-  .flip7-logo .logo-text .flip {
-    font-size: 2.125rem;
-  }
-  .flip7-logo .logo-text .seven {
-    font-size: 3.5rem;
-  }
-  .flip7-logo .fan span {
-    width: 2.75rem;
-    height: 3.875rem;
-  }
-  .flip7-logo .ribbon {
-    font-size: 0.75rem;
-    letter-spacing: 3px;
-    padding: 0.375rem 1.125rem;
   }
 
   .panel {
@@ -2547,22 +2413,34 @@ body:has(.overlay) {
     font-size: 1.125rem;
   }
 
-  /* round entry: stack the name above its controls */
+  /* round entry: keep the name and its controls on one line; shrink the
+     controls so they fit, and let the name truncate if needed. */
   .entry-player {
-    flex-wrap: wrap;
-    gap: 1rem 0.5rem;
-    padding: 0.75rem 0.875rem;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+    padding: 0.75rem 0.75rem;
   }
   .entry-player .pname {
-    flex-basis: 100%;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .entry-controls {
-    width: 100%;
-    justify-content: space-between;
-    gap: 1rem 0.5rem;
+    flex: none;
+    gap: 0.375rem;
   }
-  .flip7-btn {
+  .entry-controls .cell-input {
+    width: 2.75rem;
+  }
+  .flip7-btn,
+  .bust-btn,
+  .x2-btn,
+  .sign-btn {
     font-size: 0.75rem;
+    padding: 0.4rem 0.6rem;
+    min-width: 0;
   }
 
   .modal {
@@ -2593,11 +2471,8 @@ body:has(.overlay) {
 }
 
 @media (max-width: 23.75rem) {
-  .flip7-logo .logo-text .flip {
-    font-size: 1.75rem;
-  }
-  .flip7-logo .logo-text .seven {
-    font-size: 2.875rem;
+  .brand-logo img {
+    width: 80vw;
   }
   .tagline {
     display: none;
@@ -2611,6 +2486,12 @@ body:has(.overlay) {
   grid-template-columns: repeat(2, 1fr);
   gap: 0.5rem;
   margin-bottom: 0.875rem;
+}
+/* one mission per line on very narrow screens */
+@media (max-width: 370px) {
+  .yams-missions {
+    grid-template-columns: 1fr;
+  }
 }
 .yams-mission {
   display: flex;
@@ -2801,4 +2682,89 @@ app-logo,
 app-stats-table,
 app-score-summary {
   display: block;
+}
+
+/* ---------- dark mode (auto, follows the OS — no toggle) ----------
+   Built on the design's CSS variables: dark mode just remaps the neutral
+   surfaces, text and shadows. Brand accents (teal/coral/gold + per-mode
+   colours) stay as-is — they read well on dark. --teal-dark is mostly used as
+   text on light surfaces, so it's brightened here; the two spots that use it as
+   a background keep white text (same contrast as light-mode buttons). A handful
+   of hardcoded-light spots are patched below. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #0c1a18; /* page background (darkest) */
+    --card: #18322e; /* cards / panels — a clear step above the page */
+    --cream: #22423d; /* "cream" surfaces: inputs, pills — lighter, they pop */
+    --teal-bg: #163330; /* subtle teal tint: subtotal rows, badges */
+
+    --text: #e9f5f3;
+    --muted: #9bb7b3;
+    --teal-dark: #54d1ca; /* dark-text accent → bright so it reads on dark */
+
+    /* deeper shadows for separation against the dark background */
+    --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 6px 24px rgba(0, 0, 0, 0.6);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Shadows barely show on dark, so elevated surfaces get a hairline border to
+     stand out from the page. The cards keep their coloured left accent. */
+  .game-card {
+    border-top: 1px solid rgba(255, 255, 255, 0.09);
+    border-right: 1px solid rgba(255, 255, 255, 0.09);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  }
+  .panel,
+  .modal {
+    border: 1px solid rgba(255, 255, 255, 0.09);
+  }
+  /* Stronger dim behind dialogs so the modal reads as a distinct layer. */
+  .overlay {
+    background: rgba(0, 0, 0, 0.6);
+  }
+  /* Inputs read as recessed "wells": darker than their surface + clear border. */
+  input[type="text"],
+  input[type="number"] {
+    background: #102220;
+    border-color: rgba(255, 255, 255, 0.32);
+  }
+  .entry-player {
+    background: #25453f; /* lighter than the modal so rows read as raised */
+    border-color: rgba(60, 196, 189, 0.45);
+    border-left-color: var(--teal-light);
+  }
+  /* Row state tints: blend the accent into the dark row colour (not --teal-bg,
+     which is much darker) and lighten the name so it stays readable. */
+  .entry-player.busted {
+    background: linear-gradient(90deg, rgba(239, 108, 74, 0.32), #25453f 60%);
+  }
+  .entry-player.flipped {
+    background: linear-gradient(90deg, rgba(93, 173, 226, 0.32), #25453f 60%);
+  }
+  .entry-player.doubled {
+    background: linear-gradient(90deg, rgba(81, 180, 124, 0.32), #25453f 60%);
+  }
+  .entry-player.busted .pname {
+    color: var(--coral-light);
+  }
+  .entry-player.doubled .pname {
+    color: #74cf9a;
+  }
+  /* Hardcoded-light topbar background. */
+  .topbar {
+    background: rgba(20, 40, 37, 0.72);
+    border-bottom-color: rgba(60, 196, 189, 0.25);
+  }
+  /* Contrée: "black" suits use --ink (dark) — flip them light on dark cards. */
+  .suit,
+  .suit-btn {
+    color: var(--text);
+  }
+  .suit-btn.active {
+    background: var(--text);
+    border-color: var(--text);
+    color: var(--surface);
+  }
 }

@@ -262,7 +262,7 @@ function openContreeScoreDialog(game) {
             <span class="pname">${esc(t.name)}</span>
             <div class="entry-controls">
               <input type="number" inputmode="numeric" class="cell-input" data-score="${t.id}" placeholder="0" />
-              <button type="button" class="btn btn-ghost btn-sm belote-btn" data-belote="${t.id}">Belote (+20)</button>
+              <button type="button" class="btn btn-ghost btn-sm belote-btn" data-belote="${t.id}" title="Belote (+20)" aria-label="Belote (+20)"><i class="fa-regular fa-crown btn-ico" aria-hidden="true"></i><span class="btn-label">Belote (+20)</span></button>
             </div>
           </div>`,
           )

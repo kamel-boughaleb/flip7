@@ -70,8 +70,8 @@ function buildEntryRow(game, draft, p, onChange) {
       <span class="pname">${esc(p.name)}</span>
       <div class="entry-controls">
         <input type="number" inputmode="numeric" class="cell-input" placeholder="0" min="0" value="${d.bust ? "" : esc(d.points)}" ${d.bust ? "disabled" : ""} />
-        <button type="button" class="btn btn-ghost btn-sm flip7-btn ${d.flip7 ? "active" : ""}" ${d.bust ? "disabled" : ""}>Flip 7</button>
-        <button type="button" class="btn btn-ghost btn-sm bust-btn ${d.bust ? "active" : ""}">Éliminé</button>
+        <button type="button" class="btn btn-ghost btn-sm flip7-btn ${d.flip7 ? "active" : ""}" ${d.bust ? "disabled" : ""} title="Flip 7" aria-label="Flip 7"><i class="fa-regular fa-star btn-ico" aria-hidden="true"></i><span class="btn-label">Flip 7</span></button>
+        <button type="button" class="btn btn-ghost btn-sm bust-btn ${d.bust ? "active" : ""}" title="Éliminé" aria-label="Éliminé"><i class="fa-regular fa-ban btn-ico" aria-hidden="true"></i><span class="btn-label">Éliminé</span></button>
       </div>
     </div>`);
   const numInput = row.querySelector('input[type="number"]');
