@@ -33,6 +33,7 @@ export function openSetupDialog(opts = {}) {
           { id: uid(), name: "" },
         ];
   let mode = opts.mode && MODES[opts.mode] ? opts.mode : DEFAULT_MODE;
+  let yamsChance = false; // Yam's-only option: add the optional Chance case
 
   modal.innerHTML = `
     <div class="rules-dialog-head">
@@ -47,6 +48,16 @@ export function openSetupDialog(opts = {}) {
       <div class="field" id="targetField" hidden>
         <label for="targetInput">Score cible</label>
         <input type="number" inputmode="numeric" class="cell-input target-input" id="targetInput" placeholder="2000" value="2000" />
+      </div>
+      <div class="field" id="yamsOptField" hidden>
+        <label>Options</label>
+        <button type="button" class="setup-opt" id="yamsChanceToggle" aria-pressed="false">
+          <span class="setup-opt-main">
+            <span class="setup-opt-name">Chance</span>
+            <span class="setup-opt-desc muted">Ajoute une 13ᵉ case : la somme des 5 dés.</span>
+          </span>
+          <span class="setup-opt-switch" aria-hidden="true"></span>
+        </button>
       </div>
       <div class="field">
         <label id="playersLabel">Joueurs</label>
@@ -66,6 +77,8 @@ export function openSetupDialog(opts = {}) {
   const playersLabel = modal.querySelector("#playersLabel");
   const targetField = modal.querySelector("#targetField");
   const targetInput = modal.querySelector("#targetInput");
+  const yamsOptField = modal.querySelector("#yamsOptField");
+  const yamsChanceToggle = modal.querySelector("#yamsChanceToggle");
   const teamsHint = modal.querySelector("#teamsHint");
   const isTeams = () => rulesetOf(mode).teams;
   // Reflect the selected game's wording (players vs teams).
@@ -88,6 +101,7 @@ export function openSetupDialog(opts = {}) {
   // team games (reorderable, but no add/remove).
   const applyModeLayout = () => {
     targetField.hidden = !rulesetOf(mode).configurableTarget;
+    yamsOptField.hidden = mode !== "yams";
     if (isTeams()) {
       while (players.length < 4) players.push({ id: uid(), name: "" });
       if (players.length > 4) players.length = 4;
@@ -130,6 +144,12 @@ export function openSetupDialog(opts = {}) {
     rowsEl.querySelector(".player-row:last-child input").focus();
   });
 
+  yamsChanceToggle.addEventListener("click", () => {
+    yamsChance = !yamsChance;
+    yamsChanceToggle.classList.toggle("active", yamsChance);
+    yamsChanceToggle.setAttribute("aria-pressed", String(yamsChance));
+  });
+
   const close = () => overlay.remove();
   modal
     .querySelectorAll("[data-act=close]")
@@ -165,6 +185,7 @@ export function openSetupDialog(opts = {}) {
       players: valid.map((p) => ({ id: p.id, name: p.name.trim() })),
       rounds: [],
     };
+    if (mode === "yams" && yamsChance) game.yamsChance = true;
     upsertGame(game);
     overlay.remove();
     go("game", { id: game.id });

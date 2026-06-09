@@ -99,12 +99,34 @@ const YAMS_CATEGORIES = [
   { key: "petite", label: "Petite suite", section: "lower", fixed: 25 },
   { key: "grande", label: "Grande suite", section: "lower", fixed: 40 },
   { key: "yams", label: "Yam's", section: "lower", fixed: 50 },
+  { key: "chance", label: "Chance", section: "lower", fixed: null, free: true },
 ];
 const YAMS_UPPER_KEYS = ["ones", "twos", "threes", "fours", "fives", "sixes"];
 const YAMS_BONUS_MIN = 63; // upper-section sum unlocking the bonus
 const YAMS_BONUS = 35; // bonus points awarded once the threshold is reached
 function yamsCat(key) {
   return YAMS_CATEGORIES.find((c) => c.key === key) || null;
+}
+// The Chance mission is optional, enabled per game at setup. Existing games
+// (no flag) keep the classic 12-case card.
+function yamsChanceEnabled(game) {
+  return !!(game && game.yamsChance);
+}
+// Missions in play for a given game: the base card, plus Chance when enabled.
+function yamsCategories(game) {
+  return yamsChanceEnabled(game)
+    ? YAMS_CATEGORIES
+    : YAMS_CATEGORIES.filter((c) => !c.free);
+}
+// Text for a category's value badge. Fixed combos show their points; the upper
+// section and Chance show the achievable point range (min–max) — scratching to
+// 0 is excluded since any case can be barred. Upper: 1 die (face) → 5 dice
+// (5 × face); Chance: the five-dice sum, 5 → 30.
+function yamsBadge(cat) {
+  if (cat.fixed != null) return String(cat.fixed);
+  if (cat.free) return "5 à 30";
+  const face = cat.face || 1;
+  return `${face} à ${5 * face}`;
 }
 // Categories a player has already filled (set of keys).
 function yamsFilled(game, playerId) {
@@ -132,7 +154,7 @@ function yamsComplete(game) {
   return (
     game.players.length > 0 &&
     game.players.every(
-      (p) => yamsFilled(game, p.id).size >= YAMS_CATEGORIES.length,
+      (p) => yamsFilled(game, p.id).size >= yamsCategories(game).length,
     )
   );
 }
@@ -484,27 +506,28 @@ function rulesYamsHTML() {
 
     <h3><i class="fa-regular fa-dice"></i> Le matériel</h3>
     <ul>
-      <li><b>5 dés</b> et une <b>feuille de marque</b> par joueur (les 12 cases du contrat).</li>
+      <li><b>5 dés</b> et une <b>feuille de marque</b> par joueur (les 12 cases du contrat, ou 13 avec la Chance).</li>
       <li>À son tour : jusqu'à <b>3 lancers</b>, en gardant les dés voulus entre chaque relance.</li>
     </ul>
 
-    <h3><i class="fa-regular fa-list-check"></i> Les 12 missions</h3>
+    <h3><i class="fa-regular fa-list-check"></i> Les missions</h3>
     <ul>
       <li><b>Section haute</b> — As, Deux, Trois, Quatre, Cinq, Six : on marque la <b>somme des dés</b> de la valeur choisie.</li>
       <li><b>Brelan</b> (3 identiques) = <b>25</b> · <b>Carré</b> (4 identiques) = <b>35</b> · <b>Full</b> (brelan + paire) = <b>30</b>.</li>
       <li><b>Petite suite</b> (4 à la suite) = <b>25</b> · <b>Grande suite</b> (5 à la suite) = <b>40</b> · <b>Yam's</b> (5 identiques) = <b>50</b>.</li>
+      <li><b>Chance</b> <i>(optionnelle, activée à la création)</i> — on marque la <b>somme des 5 dés</b>, quelle que soit la combinaison (à jouer quand rien d'autre ne paie).</li>
     </ul>
 
     <h3><i class="fa-regular fa-star"></i> Le bonus</h3>
     <p>Si le total de la <b>section haute</b> atteint <b>63 points</b>, on gagne un <b>bonus de +35</b>.</p>
 
     <h3><i class="fa-regular fa-trophy"></i> Fin de la partie</h3>
-    <p>La partie s'arrête quand <b>tous les joueurs ont rempli leurs 12 cases</b>. Le joueur au <b>plus haut total</b> (cases + bonus) gagne.</p>
+    <p>La partie s'arrête quand <b>tous les joueurs ont rempli toutes leurs cases</b>. Le joueur au <b>plus haut total</b> (cases + bonus) gagne.</p>
 
     <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
     <ul>
       <li>Au démarrage, choisissez <b>« Qui commence ? »</b> ; les tours s'enchaînent ensuite <b>dans l'ordre des joueurs</b>.</li>
-      <li>À chaque tour, choisissez la <b>mission</b> à inscrire. Pour la <b>section haute</b>, indiquez le <b>nombre de dés</b> de la face (l'app multiplie par la valeur) ; les figures fixes sont remplies automatiquement. Vous pouvez aussi <b>barrer</b> la case (0 point).</li>
+      <li>À chaque tour, choisissez la <b>mission</b> à inscrire. Pour la <b>section haute</b>, indiquez le <b>nombre de dés</b> de la face (l'app multiplie par la valeur) ; les figures fixes sont remplies automatiquement. Pour la <b>Chance</b>, saisissez directement la <b>somme des 5 dés</b>. Vous pouvez aussi <b>barrer</b> la case (0 point).</li>
       <li>Le <b>bonus de +35</b> est <b>calculé automatiquement</b> dès que la section haute atteint 63.</li>
       <li>La partie se <b>termine d'elle-même</b> une fois toutes les cases remplies ; le joueur en tête est couronné.</li>
     </ul>`;
@@ -517,6 +540,9 @@ export {
   YAMS_BONUS_MIN,
   YAMS_BONUS,
   yamsCat,
+  yamsBadge,
+  yamsCategories,
+  yamsChanceEnabled,
   yamsFilled,
   yamsUpperSum,
   yamsUpperBonus,

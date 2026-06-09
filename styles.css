@@ -711,6 +711,77 @@ input:focus {
   font-size: 0.8rem;
   line-height: 1.4;
 }
+/* Setup option toggle (e.g. Yam's Chance): a switch-style row button. */
+.setup-opt {
+  appearance: none;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  text-align: left;
+  border: 2px solid var(--teal-light);
+  background: var(--card);
+  border-radius: var(--r-md);
+  padding: 0.625rem 0.75rem;
+  box-shadow: var(--shadow-sm);
+  transition: filter 0.15s ease;
+}
+.setup-opt:hover {
+  filter: brightness(1.04);
+}
+.setup-opt-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+.setup-opt-name {
+  font-weight: 800;
+  color: var(--teal-dark);
+}
+.setup-opt-desc {
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+.setup-opt-switch {
+  flex: none;
+  width: 2.5rem;
+  height: 1.5rem;
+  border-radius: 1rem;
+  background: var(--muted);
+  opacity: 0.55;
+  position: relative;
+  transition:
+    background 0.15s ease,
+    opacity 0.15s ease;
+}
+.setup-opt-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(1.5rem - 4px);
+  height: calc(1.5rem - 4px);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s var(--bounce);
+}
+.setup-opt.active .setup-opt-switch {
+  background: var(--teal);
+  opacity: 1;
+}
+.setup-opt.disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.setup-opt.disabled:hover {
+  filter: none;
+}
+.setup-opt.active .setup-opt-switch::after {
+  transform: translateX(1rem);
+}
 .player-row {
   display: flex;
   gap: 1rem 0.5rem;
@@ -2610,10 +2681,15 @@ body:has(.overlay) {
   align-items: center;
   gap: 0.625rem;
 }
+.yams-value-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
 .yams-value-label {
   font-weight: 900;
   color: var(--teal-dark);
-  flex: 1;
 }
 .yams-value-row .cell-input {
   width: 5rem;
@@ -2634,7 +2710,7 @@ body:has(.overlay) {
   color: #fff;
 }
 .yams-hint {
-  margin: 0.375rem 0 0;
+  margin: 0;
   font-size: 0.8125rem;
 }
 
@@ -2678,20 +2754,8 @@ body:has(.overlay) {
   text-decoration: line-through;
   color: var(--muted);
 }
-/* Editable upper-section cell: die count input. */
-.yams-up-input {
-  width: 3.25rem;
-  text-align: center;
-  padding: 0.3125rem 0.25rem;
-  font-weight: 800;
-  margin: 0 auto;
-}
-.yams-up-input.struck {
-  color: var(--muted);
-  text-decoration: line-through;
-}
-/* Lower-section toggle: looks like an input, flips value ↔ 0 on click. */
-.yams-toggle {
+/* Filled cell: a tappable chip showing the score; opens the turn editor. */
+.yams-cell-edit {
   min-width: 3.25rem;
   padding: 0.3125rem 0.625rem;
   border: 2px solid var(--teal-light);
@@ -2700,16 +2764,20 @@ body:has(.overlay) {
   color: var(--teal-dark);
   font-weight: 800;
   cursor: pointer;
-  transition: filter 0.15s ease;
+  transition:
+    filter 0.15s ease,
+    transform 0.12s var(--bounce);
 }
-.yams-toggle:hover {
+.yams-cell-edit:hover {
   filter: brightness(1.04);
 }
-.yams-toggle.active {
-  background: var(--teal);
-  border-color: var(--teal);
-  color: #fff;
-  box-shadow: var(--shadow-teal-glow);
+.yams-cell-edit:active {
+  transform: scale(0.96);
+}
+.yams-cell-edit.struck {
+  color: var(--muted);
+  text-decoration: line-through;
+  border-style: dashed;
 }
 .yams-empty {
   color: var(--teal-light);
