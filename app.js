@@ -107,7 +107,7 @@ import { openSetupDialog } from "./js/dialogs/setup.js";
 import { openEditPlayersDialog } from "./js/dialogs/edit-players.js";
 import { buildRoundEntry, openScoresDialog } from "./js/dialogs/scores.js";
 import { buildTurnBar } from "./js/dialogs/turn.js";
-import { buildBombuBar } from "./js/dialogs/bombu.js";
+import { buildBombuBar, buildBombuContractInfo } from "./js/dialogs/bombu.js";
 import { openYamsEditDialog } from "./js/dialogs/yams.js";
 import { celebrateIfNewWinner } from "./js/dialogs/celebrate.js";
 import { endGamePrompt } from "./js/actions.js";
@@ -667,6 +667,9 @@ function renderGame(id) {
     app.appendChild(wrapPanel(buildContreeSummary(game)));
     if (!w) app.appendChild(buildContreeBar(game));
   } else {
+    // Bombu: show the active contract card above the scoreboard (like Contrée).
+    if (defFor(game).entry === "bombu" && !w && game.pendingContract)
+      app.appendChild(wrapPanel(buildBombuContractInfo(game)));
     const summary = document.createElement("app-score-summary");
     summary.game = game;
     app.appendChild(wrapPanel(summary));
