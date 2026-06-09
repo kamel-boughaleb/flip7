@@ -20,6 +20,7 @@ import {
 import { winner } from "../scoring.js";
 import { go } from "../nav.js";
 import { renderPlayerRows } from "./player-rows.js";
+import { renderTeamBuilder, makeTeam } from "./team-builder.js";
 
 export function openEditPlayersDialog(game) {
   const id = game.id;
@@ -39,6 +40,19 @@ export function openEditPlayersDialog(game) {
     const cell = Object.values(r.scores)[0];
     return cell && cell.category === "chance";
   });
+  // Time's Up! team builder: load this game's teams (or defaults if converting).
+  let teams = defFor(game).teamBuilder
+    ? game.players.map((t) => ({
+        id: t.id || uid(),
+        name: t.name || "",
+        members: (t.members || []).map((m) => ({
+          id: m.id || uid(),
+          name: m.name || "",
+        })),
+      }))
+    : [];
+  while (teams.length < 2) teams.push(makeTeam(teams));
+  let rosterDraw = () => {};
 
   modal.innerHTML = `
     <div class="rules-dialog-head">
@@ -97,20 +111,65 @@ export function openEditPlayersDialog(game) {
   const curTurn = !!defFor(game).turnBased;
   const curTeams = !!defFor(game).teams;
   const curBombu = defFor(game).entry === "bombu";
+  const curBuilder = !!defFor(game).teamBuilder;
   const isTeams = () => rulesetOf(mode).teams;
   // Games with a fixed roster: Contrée (teams, 4) and Bombu (fixedPlayers: 4).
   const fixedCount = () => (isTeams() ? 4 : rulesetOf(mode).fixedPlayers || 0);
+  // Time's Up!: the roster is a team builder instead of a flat player list.
+  const useTeamBuilder = () => !!rulesetOf(mode).teamBuilder;
+  function mountRoster() {
+    if (useTeamBuilder()) {
+      rosterDraw = renderTeamBuilder(rowsEl, teams, {
+        onChange: () => {},
+        suggestions: () => placePlayerNames(getSelectedPlace(), "joueur"),
+      });
+    } else {
+      rosterDraw = renderPlayerRows(rowsEl, players, {
+        allowRemove: () => !locked && !fixedCount(),
+        placeholder: () => unitOf(mode).placeholder,
+        suggestions: () => placePlayerNames(getSelectedPlace(), unitKeyOf(mode)),
+      });
+    }
+  }
+  // Carry the typed names across when switching between the flat player list and
+  // the team builder, so changing the game type doesn't lose them.
+  let lastBuilder = useTeamBuilder();
+  function syncRoster(nowBuilder) {
+    if (nowBuilder === lastBuilder) return;
+    if (nowBuilder) {
+      const names = players.map((p) => (p.name || "").trim()).filter(Boolean);
+      if (names.length) {
+        teams.forEach((t) => (t.members = []));
+        names.forEach((n, i) =>
+          teams[i % teams.length].members.push({ id: uid(), name: n }),
+        );
+        teams.forEach((t) => {
+          if (!t.members.length) t.members.push({ id: uid(), name: "" });
+        });
+      }
+    } else {
+      const names = teams
+        .flatMap((t) => t.members.map((m) => (m.name || "").trim()))
+        .filter(Boolean);
+      players = names.length
+        ? names.map((n) => ({ id: uid(), name: n }))
+        : [{ id: uid(), name: "" }, { id: uid(), name: "" }];
+      while (players.length < 2) players.push({ id: uid(), name: "" });
+    }
+    lastBuilder = nowBuilder;
+  }
   const modeTabs = modal.querySelector("#modeTabs");
   const tabBtns = modeTabs.querySelectorAll(".mode-tab");
   tabBtns.forEach((b) => {
     const r = rulesetOf(b.dataset.mode);
-    // Bombu stores deals differently too, so it can't be switched to/from once
-    // the game has started.
+    // Bombu and Time's Up! store their roster/rounds differently, so they can't
+    // be switched to/from once the game has started.
     if (
       hasRounds &&
       (!!r.turnBased !== curTurn ||
         !!r.teams !== curTeams ||
-        (r.entry === "bombu") !== curBombu)
+        (r.entry === "bombu") !== curBombu ||
+        !!r.teamBuilder !== curBuilder)
     ) {
       b.disabled = true;
       b.classList.add("disabled");
@@ -132,9 +191,12 @@ export function openEditPlayersDialog(game) {
   // Team games keep a fixed roster (no add/remove); games with a configurable
   // target (Contrée) expose the score-target field.
   const applyRoster = () => {
-    if (addBtn) addBtn.style.display = fixedCount() ? "none" : "";
+    syncRoster(useTeamBuilder()); // carry names over when the roster type flips
+    if (addBtn)
+      addBtn.style.display = useTeamBuilder() || fixedCount() ? "none" : "";
     targetField.hidden = !rulesetOf(mode).configurableTarget;
     yamsOptField.hidden = mode !== "yams";
+    mountRoster();
     updateTeamsHint();
   };
   const syncModeTabs = () =>
@@ -145,27 +207,29 @@ export function openEditPlayersDialog(game) {
       mode = b.dataset.mode;
       syncModeTabs();
       applyUnit();
-      applyRoster();
-      drawRows();
+      applyRoster(); // mounts the roster for the new mode
     }),
   );
   syncModeTabs();
 
-  const drawRows = renderPlayerRows(rowsEl, players, {
-    allowRemove: () => !locked && !fixedCount(),
-    placeholder: () => unitOf(mode).placeholder,
-    suggestions: () => placePlayerNames(getSelectedPlace(), unitKeyOf(mode)),
-  });
   applyUnit();
-  applyRoster();
+  applyRoster(); // mounts the roster
   // Keep the teams preview in sync with name edits and reordering.
   rowsEl.addEventListener("input", updateTeamsHint);
   rowsEl.addEventListener("pointerup", () => setTimeout(updateTeamsHint, 0));
   if (addBtn) {
     addBtn.addEventListener("click", () => {
-      players.push({ id: uid(), name: "" });
-      drawRows();
-      rowsEl.querySelector(".player-row:last-child input").focus();
+      if (useTeamBuilder()) {
+        teams.push(makeTeam(teams));
+        rosterDraw();
+        const cards = rowsEl.querySelectorAll(".team-card");
+        if (cards.length)
+          cards[cards.length - 1].querySelector(".team-name").focus();
+      } else {
+        players.push({ id: uid(), name: "" });
+        rosterDraw();
+        rowsEl.querySelector(".player-row:last-child input").focus();
+      }
     });
   }
 
@@ -185,8 +249,37 @@ export function openEditPlayersDialog(game) {
   });
 
   modal.querySelector("#save").addEventListener("click", () => {
-    const valid = players.filter((p) => p.name.trim());
     const def = rulesetOf(mode);
+    // Time's Up!: rebuild the teams (named players) from the builder.
+    if (def.teamBuilder) {
+      const built = teams
+        .map((t) => ({
+          id: t.id,
+          name: t.name.trim(),
+          members: t.members
+            .map((m) => ({ id: m.id, name: m.name.trim() }))
+            .filter((m) => m.name),
+        }))
+        .filter((t) => t.name || t.members.length);
+      if (built.length < 2) return toast("Au moins 2 équipes requises");
+      for (const t of built)
+        if (!t.name) return toast("Donnez un nom à chaque équipe");
+      const dupT = firstDuplicateName(built.map((t) => t.name));
+      if (dupT) return toast(`L'équipe « ${dupT} » est en double`);
+      const dupP = firstDuplicateName(
+        built.flatMap((t) => t.members.map((m) => m.name)),
+      );
+      if (dupP) return toast(`« ${dupP} » est présent dans deux équipes`);
+      const g = getGame(id);
+      g.players = built;
+      g.mode = mode; // switching to/from Time's Up! is gated by the tab lock
+      g.target = def.target;
+      delete g.yamsChance;
+      upsertGame(g);
+      overlay.remove();
+      return go("game", { id });
+    }
+    const valid = players.filter((p) => p.name.trim());
     if (def.teams) {
       if (valid.length !== 4)
         return toast("La Contrée se joue à exactement 4 joueurs");

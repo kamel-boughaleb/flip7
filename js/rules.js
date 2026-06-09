@@ -42,6 +42,7 @@ const RULESETS = {
     scoreOrder: "desc", // highest team total wins
     entry: "number",
     unit: "equipe", // played by teams, not individual players
+    teamBuilder: true, // teams are built from named players (stats credit each)
     cellValue(cell) {
       return Number(cell && cell.points) || 0;
     },
@@ -181,13 +182,13 @@ function yamsComplete(game) {
    Réussite awards negative (good) points. `sign` is just a UI accent: "neg" =
    a penalty contract, "pos" = the rewarding Réussite. */
 const BOMBU_CONTRACTS = [
-  { key: "noTricks", label: "Pas de plis", sign: "neg", badge: "2 /pli", note: "2 pts par pli" },
-  { key: "lastTrick", label: "Dernier pli", sign: "neg", badge: "8", note: "8 pts au dernier pli" },
-  { key: "noQueens", label: "Pas de dames", sign: "neg", badge: "2 /dame", note: "2 pts par dame" },
-  { key: "noHearts", label: "Pas de cœurs", sign: "neg", badge: "1 /cœur", note: "1 pt par cœur" },
-  { key: "barbu", label: "Barbu (Roi ♥)", sign: "neg", badge: "8", note: "8 pts au preneur du Roi ♥" },
-  { key: "reussite", label: "Réussite", sign: "pos", badge: "−20 à 0", note: "−20 / −10 / −5 / 0 selon l'ordre d'arrivée" },
-  { key: "generale", label: "Générale", sign: "neg", badge: "≈ 40", note: "tous les contrats cumulés (≈ 40 pts)" },
+  { key: "noTricks", label: "Pas de plis", sign: "neg", badge: "1 /pli", note: "1 pt par pli", total: 8, entry: { mode: "count", per: 1, unit: "plis" } },
+  { key: "lastTrick", label: "Dernier pli", sign: "neg", badge: "8", note: "8 pts au dernier pli", total: 8, entry: { mode: "who", value: 8, ask: "Qui a fait le dernier pli ?" } },
+  { key: "noQueens", label: "Pas de dames", sign: "neg", badge: "2 /dame", note: "2 pts par dame", total: 8, entry: { mode: "count", per: 2, unit: "dames" } },
+  { key: "noHearts", label: "Pas de cœurs", sign: "neg", badge: "1 /cœur", note: "1 pt par cœur", total: 8, entry: { mode: "count", per: 1, unit: "cœurs" } },
+  { key: "barbu", label: "Barbu (Roi ♥)", sign: "neg", badge: "8", note: "8 pts au preneur du Roi ♥", total: 8, entry: { mode: "who", value: 8, ask: "Qui a pris le Roi ♥ ?" } },
+  { key: "reussite", label: "Réussite", sign: "pos", badge: "−20 à 0", note: "−20 / −10 / −5 / 0 selon l'ordre d'arrivée", total: -35, entry: { mode: "rank", values: [-20, -10, -5, 0] } },
+  { key: "generale", label: "Générale", sign: "neg", badge: "≈ 40", note: "tous les contrats cumulés (≈ 40 pts)", total: 40, entry: { mode: "free" } },
 ];
 function bombuContract(key) {
   return BOMBU_CONTRACTS.find((c) => c.key === key) || null;
@@ -595,7 +596,7 @@ function rulesBombuHTML() {
 
     <h3><i class="fa-regular fa-circle-minus"></i> Les contrats à éviter (pénalités)</h3>
     <ul>
-      <li><b>Pas de plis</b> — <b>2 points par pli</b> ramassé.</li>
+      <li><b>Pas de plis</b> — <b>1 point par pli</b> ramassé.</li>
       <li><b>Dernier pli</b> — <b>8 points</b> à qui remporte le dernier pli.</li>
       <li><b>Pas de dames</b> — <b>2 points par dame</b> ramassée.</li>
       <li><b>Pas de cœurs</b> — <b>1 point par cœur</b> ramassé.</li>

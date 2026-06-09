@@ -650,12 +650,17 @@ function renderGame(id) {
     const names = winnersLabel(ws);
     // A team winner (Contrée) is plural even though there's a single team.
     const plural = ws.length > 1 || defFor(game).teams;
+    // Single team winner (Time's Up!): list its players under the banner.
+    const sub =
+      ws.length === 1 && ws[0].members && ws[0].members.length
+        ? `<div class="banner-sub">${ws[0].members.map((m) => esc(m.name)).join(", ")}</div>`
+        : "";
     const banner = game.cancelled
       ? el(
-          `<div class="banner banner-cancelled"><i class="fa-regular fa-ban"></i> Partie annulée — ${plural ? "Vainqueurs" : "Vainqueur"} : <b>${names}</b> (${ws[0].total} pts)</div>`,
+          `<div class="banner banner-cancelled"><i class="fa-regular fa-ban"></i> Partie annulée — ${plural ? "Vainqueurs" : "Vainqueur"} : <b>${names}</b> (${ws[0].total} pts)${sub}</div>`,
         )
       : el(
-          `<div class="banner">${confettiMarkup()}<span class="crown"><i class="fa-regular fa-trophy"></i></span> <b>${names}</b> ${plural ? "gagnent" : "gagne"} avec ${ws[0].total} points !</div>`,
+          `<div class="banner">${confettiMarkup()}<span class="crown"><i class="fa-regular fa-trophy"></i></span> <b>${names}</b> ${plural ? "gagnent" : "gagne"} avec ${ws[0].total} points !${sub}</div>`,
         );
     app.appendChild(wrapPanel(banner));
   }
@@ -706,6 +711,9 @@ function renderGame(id) {
       openSetupDialog({
         prefill: game.players.map((p) => p.name),
         mode: game.mode,
+        target: game.target,
+        yamsChance: game.yamsChance,
+        teams: game.players, // Time's Up!: carry over teams + their players
       }),
     );
   app.appendChild(linksWrap);
@@ -817,6 +825,7 @@ function renderStats() {
     { key: "timesup", label: "Time's Up!" },
     { key: "contree", label: "Contrée" },
     { key: "yams", label: "Yam's" },
+    { key: "bombu", label: "Bombu" },
   ];
   let statMode = "flip7";
   let statMetric = "wins";

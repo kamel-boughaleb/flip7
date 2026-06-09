@@ -7,6 +7,8 @@ import {
   yamsComplete,
   yamsFilled,
   yamsCategories,
+  bombuTaken,
+  BOMBU_CONTRACTS,
   contreeSuit,
 } from "./rules.js";
 
@@ -142,12 +144,16 @@ function currentPlayer(game) {
   }
   return null; // everyone is done
 }
-// Bombu: the player choosing the current deal's contract. The chosen starter is
-// rotated by the number of deals already played (choice passes in roster order).
+// Bombu: the player choosing the current deal's contract. A player plays ALL
+// their contracts before the hand passes on, so the chooser is the first player
+// (in turn order from the starter) who hasn't finished their card of 7 yet.
 function bombuChooser(game) {
   if (!game.starter) return null;
-  const order = turnOrder(game);
-  return order.length ? order[game.rounds.length % order.length] : null;
+  return (
+    turnOrder(game).find(
+      (p) => bombuTaken(game, p.id).size < BOMBU_CONTRACTS.length,
+    ) || null
+  );
 }
 
 // Noun for the scoring unit: "donne" (Contrée), "tour" (turn-based), else

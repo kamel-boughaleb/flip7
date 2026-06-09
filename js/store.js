@@ -4,7 +4,7 @@
    the rest of the app only reads it through the exported accessors. */
 import { toast } from "./util.js";
 import { winner } from "./scoring.js";
-import { unitKeyOf } from "./rules.js";
+import { unitKeyOf, rulesetOf } from "./rules.js";
 
 // Single shared store for every game type (legacy key kept for back-compat).
 const STORE_KEY = "flip7_games";
@@ -241,16 +241,24 @@ function gamesForPlace(place) {
 }
 
 // Distinct player (or team) names seen at a place, for entry autocompletion.
+// Team-builder games (Time's Up!) store teams whose members are players, so a
+// "joueur" pool gathers those members and an "equipe" pool the team names.
 function placePlayerNames(place, unit = "joueur") {
   const seen = new Map(); // lowercased -> original casing
-  gamesForPlace(place)
-    .filter((g) => unitKeyOf(g.mode) === unit)
-    .forEach((g) =>
-      g.players.forEach((p) => {
-        const n = (p.name || "").trim();
-        if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
-      }),
-    );
+  const add = (n) => {
+    const t = (n || "").trim();
+    if (t && !seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t);
+  };
+  gamesForPlace(place).forEach((g) => {
+    if (rulesetOf(g.mode).teamBuilder) {
+      g.players.forEach((t) => {
+        if (unit === "joueur") (t.members || []).forEach((m) => add(m.name));
+        else add(t.name);
+      });
+    } else if (unitKeyOf(g.mode) === unit) {
+      g.players.forEach((p) => add(p.name));
+    }
+  });
   return [...seen.values()].sort((a, b) => a.localeCompare(b, "fr"));
 }
 

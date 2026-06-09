@@ -79,6 +79,11 @@ function celebrate(game) {
   const text = pool[Math.floor(Math.random() * pool.length)];
   const emoji = emojiPool[Math.floor(Math.random() * emojiPool.length)];
   const names = ws.map((p) => esc(p.name)).join(" & ");
+  // Single team winner (Time's Up!): show its players under the team name.
+  const sub =
+    !tie && ws[0].members && ws[0].members.length
+      ? `<div class="cel-name-sub">${ws[0].members.map((m) => esc(m.name)).join(", ")}</div>`
+      : "";
   const variant = "cel-v" + (1 + Math.floor(Math.random() * 5)); // random animation
   const overlay = el(`
     <div class="celebrate ${variant}">
@@ -87,6 +92,7 @@ function celebrate(game) {
         <div class="cel-emoji">${emoji}</div>
         <div class="cel-title">${esc(text)}</div>
         <div class="cel-name">${names}</div>
+        ${sub}
         <div class="cel-score">${ws[0].total} points <i class="fa-regular fa-trophy"></i></div>
         <div class="cel-actions">
           <button class="btn btn-primary cel-close">Continuer</button>
@@ -110,6 +116,9 @@ function celebrate(game) {
       openSetupDialog({
         prefill: game.players.map((p) => p.name),
         mode: game.mode,
+        target: game.target,
+        yamsChance: game.yamsChance,
+        teams: game.players, // Time's Up!: carry over teams + their players
       });
       return;
     }
