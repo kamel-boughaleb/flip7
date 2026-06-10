@@ -39,11 +39,25 @@ export function placeFromSlug(slug) {
 export function go(name, params = {}) {
   route = { name, ...params };
   const place = name === "place" ? null : getSelectedPlace();
-  const hash = "#" + buildPath({ name, place, id: params.id });
+  // params may carry id / filter / mode / metric — forward them all to buildPath.
+  const hash = "#" + buildPath({ name, place, ...params });
   lastHash = hash;
   if (location.hash !== hash) location.hash = hash; // fires hashchange (ignored)
   renderCb();
   window.scrollTo(0, 0);
+}
+
+// Rewrite the URL to the canonical form of the current route WITHOUT navigating
+// (no new history entry, no re-render). Used to surface a screen's implicit
+// defaults in the URL — e.g. "/[lieu]/stats" becomes "/[lieu]/stats/flip7/wins"
+// once renderStats has resolved the default game-mode/metric. replaceState does
+// not fire hashchange, so this never loops back through applyLocation().
+export function replaceRoute(name, params = {}) {
+  route = { name, ...params };
+  const place = name === "place" ? null : getSelectedPlace();
+  const hash = "#" + buildPath({ name, place, ...params });
+  lastHash = hash;
+  if (location.hash !== hash) history.replaceState(null, "", hash);
 }
 
 // Apply the route described by the current URL (back/forward, deep link).
@@ -56,7 +70,10 @@ export async function applyLocation() {
     // The URL may point to another place: reload its games before rendering.
     if (place !== LOADED_PLACE) await fetchGames(place);
   }
-  route = { name: r.name, ...(r.id ? { id: r.id } : {}) };
+  // route carries everything the parser found except the place slug (resolved
+  // above): id for game screens, filter for home, mode/metric for stats.
+  const { placeSlug, ...rest } = r;
+  route = rest;
   renderCb();
   window.scrollTo(0, 0);
 }

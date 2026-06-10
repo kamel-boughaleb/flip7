@@ -452,6 +452,21 @@ input:focus {
   grid-template-columns: minmax(0, 1fr); /* let cards shrink instead of widening the grid */
   gap: 1rem 0.5rem;
 }
+/* Per-day heading inserted between cards (see renderHome). uppercase renders
+   the locale string ("lundi 10 juin") as "LUNDI 10 JUIN". */
+.day-separator {
+  font-weight: 800;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--teal-dark);
+  padding-bottom: 0.375rem;
+  margin-top: 0.5rem;
+  border-bottom: 2px solid rgba(43, 168, 162, 0.2);
+}
+.day-separator:first-child {
+  margin-top: 0; /* no gap above the very first day */
+}
 .game-card {
   display: flex;
   align-items: center;
@@ -1641,6 +1656,11 @@ table.score.summary-table .total-cell {
   opacity: 0.6;
   font-size: 0.8em;
 }
+/* the in-progress round's points, shown in () after the projected total */
+.score-preview-delta {
+  opacity: 0.7;
+  font-size: 0.85em;
+}
 .score-preview .crown {
   color: var(--gold-dark);
 }
@@ -2236,6 +2256,53 @@ body:has(.overlay) {
     opacity: 0;
     transform: translate(-50%, 10px);
   }
+}
+
+/* A replay of the finished game was created on another device. Same look as
+   toast() (bottom pill), but persistent and actionable (Rejoindre + dismiss). */
+.replay-banner {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.625rem;
+  max-width: calc(100vw - 2rem);
+  background: var(--teal-dark);
+  color: #fff;
+  padding: 0.5rem 0.625rem 0.5rem 1rem;
+  border-radius: var(--r-round);
+  box-shadow: var(--shadow-teal-glow);
+  z-index: 40; /* above toasts (30), below the celebration overlay (100) */
+  font-weight: 700;
+  font-size: 0.875rem;
+  animation: rise 0.25s var(--bounce);
+}
+.replay-banner-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.replay-banner .replay-join {
+  flex-shrink: 0;
+  background: #fff;
+  color: var(--teal-dark);
+}
+.replay-dismiss {
+  flex-shrink: 0;
+  background: transparent;
+  border: 0;
+  color: #fff;
+  opacity: 0.8;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.25rem;
+}
+.replay-dismiss:hover {
+  opacity: 1;
 }
 
 /* ---------- confetti ---------- */
@@ -2894,6 +2961,21 @@ app-score-summary {
   }
   .banner {
     color: #473d14;
+  }
+  /* …but the cancelled banner keeps its coral background (not gold), so dark
+     ink reads poorly — restore white like in light mode. */
+  .banner.banner-cancelled {
+    color: #fff;
+  }
+
+  /* Toasts and the replay pill use the bright teal accent (--teal-dark, which
+     is light on dark) as their background, so white text washes out — switch
+     their text/controls to dark ink for contrast. */
+  .toast,
+  .replay-banner,
+  .replay-banner .replay-join,
+  .replay-dismiss {
+    color: var(--ink);
   }
 
   /* Shadows barely show on dark, so elevated surfaces get a hairline border to

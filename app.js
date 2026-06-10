@@ -6,8 +6,9 @@ import {
   wrapPanel,
   esc,
   fmtDate,
+  dayKey,
+  dayHeading,
   fmtDuration,
-  gameNameFromDate,
   toast,
   confettiMarkup,
   firstDuplicateName,
@@ -77,6 +78,7 @@ import {
   currentRoute,
   onRender,
   currentHashPath,
+  replaceRoute,
 } from "./js/nav.js";
 import {
   db,
@@ -84,9 +86,9 @@ import {
   fetchPlaces,
   fetchGames,
   getGame,
+  replayOf,
   upsertGame,
   deleteGame,
-  uid,
   getSelectedPlace,
   setSelectedPlace,
   addLocalPlace,
@@ -152,6 +154,9 @@ function filterGamesByDate(games, filter) {
 const app = document.getElementById("app");
 let homeFilter = "today"; // games list date filter: "today" | "week" | "month" | "all"
 let pollTimer = null;
+// Finished-game ids for which we've already shown the "a replay was created"
+// banner, so polling doesn't re-show it every 2s.
+const replayNotified = new Set();
 let durationTimer = null; // ticks the live game-duration chip every second
 let statsRedraw = null; // redraws the stats table in place (filters preserved)
 
@@ -192,6 +197,7 @@ const KNOWN_ROUTES = ["place", "home", "stats", "entry", "game", "details"];
 function render() {
   stopPolling();
   stopDurationTimer();
+  document.getElementById("replay-banner")?.remove(); // drop it on navigation
   const r = currentRoute();
   const name = KNOWN_ROUTES.includes(r.name) ? r.name : "home";
   updatePlaceBtn();
@@ -235,10 +241,12 @@ function stopDurationTimer() {
 }
 // Auto-refresh the home games list (mirrors the score-screen polling), so a
 // game created on another device appears without a manual refresh.
-function startHomePolling() {
+// `immediate` runs one tick right away (used when resuming from the background,
+// so the screen catches up instead of waiting up to 2s for the first interval).
+function startHomePolling(immediate) {
   stopPolling();
   if (!db) return; // nothing to sync from in local mode
-  pollTimer = setInterval(async () => {
+  const tick = async () => {
     if (currentRoute().name !== "home") return stopPolling();
     // don't disrupt an open dialog (e.g. delete confirmation)
     if (document.querySelector("#modal-root .overlay")) return;
@@ -247,14 +255,16 @@ function startHomePolling() {
     await fetchGames();
     if (currentRoute().name !== "home") return;
     if (JSON.stringify(gamesForPlace(place)) !== before) renderHome();
-  }, 2000);
+  };
+  if (immediate) tick();
+  pollTimer = setInterval(tick, 2000);
 }
 // Auto-refresh the stats table (mirrors the home polling). Redraws in place so
 // the selected version/metric filters are kept.
-function startStatsPolling() {
+function startStatsPolling(immediate) {
   stopPolling();
   if (!db) return; // nothing to sync from in local mode
-  pollTimer = setInterval(async () => {
+  const tick = async () => {
     if (currentRoute().name !== "stats") return stopPolling();
     if (document.querySelector("#modal-root .overlay")) return;
     const place = getSelectedPlace();
@@ -263,25 +273,82 @@ function startStatsPolling() {
     if (currentRoute().name !== "stats") return;
     if (JSON.stringify(gamesForPlace(place)) !== before && statsRedraw)
       statsRedraw();
-  }, 2000);
+  };
+  if (immediate) tick();
+  pollTimer = setInterval(tick, 2000);
 }
-function startPolling(id) {
+function startPolling(id, immediate) {
   stopPolling();
   if (!db) return; // nothing to sync from in local mode
   const onScoreScreen = () => currentRoute().name === "game" || currentRoute().name === "details";
-  pollTimer = setInterval(async () => {
+  const tick = async () => {
     if (!onScoreScreen() || currentRoute().id !== id) return stopPolling();
     // don't disrupt an in-progress edit on the details screen
     const ae = document.activeElement;
     if (ae && ae.classList && ae.classList.contains("cell-input")) return;
     const before = JSON.stringify(getGame(id) || null);
+    // Capture the winner before syncing so we can fire the celebration overlay
+    // on every device once the win arrives via polling (not just on the device
+    // that entered the score — see renderDetails' "changed" handler).
+    const beforeWinnerId = (winner(getGame(id)) || {}).id;
     await fetchGames();
     if (!onScoreScreen() || currentRoute().id !== id) return;
+    maybeNotifyReplay(id); // a "Rejouer" on another device created a new game
     const after = JSON.stringify(getGame(id) || null);
     if (after !== before) {
+      const g = getGame(id);
       currentRoute().name === "details" ? renderDetails(id) : renderGame(id);
+      // Only fires when the winner id actually changed, so it shows once.
+      celebrateIfNewWinner(beforeWinnerId, g);
     }
-  }, 2000);
+  };
+  if (immediate) tick();
+  pollTimer = setInterval(tick, 2000);
+}
+
+// (Re)start the polling appropriate to the current screen, without re-rendering.
+// Used to resume live sync when the app returns to the foreground; `immediate`
+// forces a catch-up fetch right away.
+function startPollingForCurrentRoute(immediate) {
+  const r = currentRoute();
+  if (r.name === "home") startHomePolling(immediate);
+  else if (r.name === "stats") startStatsPolling(immediate);
+  else if (r.name === "game" || r.name === "details") startPolling(r.id, immediate);
+}
+
+// Don't poll while the tab/app is in the background (hidden) — it wastes
+// requests and battery and nothing is on screen to update. Resume on return.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopPolling();
+  else startPollingForCurrentRoute(true); // immediate catch-up on return
+});
+
+// Show a one-time banner when a replay of game `id` has been created elsewhere
+// (so devices still on the finished game can jump to the new one).
+function maybeNotifyReplay(id) {
+  if (replayNotified.has(id)) return;
+  const rep = replayOf(id);
+  if (!rep) return;
+  replayNotified.add(id);
+  notifyReplay(rep);
+}
+
+// Dismissible top banner offering to join the freshly-created replay game.
+function notifyReplay(game) {
+  document.getElementById("replay-banner")?.remove();
+  const banner = el(`
+    <div class="replay-banner" id="replay-banner">
+      <span class="replay-banner-text">Une nouvelle partie a été créée</span>
+      <button class="btn btn-primary btn-sm replay-join">Rejoindre</button>
+      <button class="replay-dismiss" aria-label="Ignorer"><i class="fa-regular fa-xmark"></i></button>
+    </div>`);
+  banner
+    .querySelector(".replay-join")
+    .addEventListener("click", () => go("game", { id: game.id }));
+  banner
+    .querySelector(".replay-dismiss")
+    .addEventListener("click", () => banner.remove());
+  document.body.appendChild(banner);
 }
 
 /* ---------- helpers ---------- */
@@ -298,22 +365,6 @@ function navTabs(active) {
     }),
   );
   return nav;
-}
-
-/* ---------- restart ---------- */
-function restartGame(game) {
-  const now = Date.now();
-  const newGame = {
-    id: uid(),
-    name: gameNameFromDate(now),
-    createdAt: now,
-    target: game.target,
-    place: game.place,
-    players: game.players.map((p) => ({ id: uid(), name: p.name })),
-    rounds: [],
-  };
-  upsertGame(newGame);
-  go("game", { id: newGame.id });
 }
 
 async function promptNewPlace() {
@@ -385,6 +436,10 @@ function renderHome() {
   const place = getSelectedPlace();
   if (place === null) return go("place"); // must pick a place first
 
+  // The active date filter lives in the URL ("/[lieu]/week" etc.); "today" is
+  // the implicit default. Normalised against FILTERS just below.
+  homeFilter = currentRoute().filter || "today";
+
   const games = gamesForPlace(place);
 
   // The intro/hero (logo + description + actions) is only useful before any
@@ -436,10 +491,7 @@ function renderHome() {
       }).join("")}
     </div>`);
   filterEl.querySelectorAll("button").forEach((b) =>
-    b.addEventListener("click", () => {
-      homeFilter = b.dataset.f;
-      renderHome();
-    }),
+    b.addEventListener("click", () => go("home", { filter: b.dataset.f })),
   );
   app.appendChild(filterEl);
 
@@ -462,7 +514,19 @@ function renderHome() {
   const list = el(`<div class="game-list"></div>`);
   // Each card emits a bubbling "open" event with the game id (see app-game-card).
   list.addEventListener("open", (e) => go("game", { id: e.detail }));
+  // `filtered` is sorted by createdAt desc, so days are contiguous: emit a
+  // separator each time the calendar day changes while walking the list.
+  let lastDay = null;
   filtered.forEach((g) => {
+    const day = dayKey(g.createdAt);
+    if (day !== lastDay) {
+      list.appendChild(
+        el(
+          `<div class="day-separator">${esc(dayHeading(g.createdAt))}</div>`,
+        ),
+      );
+      lastDay = day;
+    }
     const card = document.createElement("app-game-card");
     card.game = g;
     list.appendChild(card);
@@ -487,6 +551,14 @@ function renderGame(id) {
 
   const st = standings(game);
   const w = winner(game);
+  // A game with no committed round and no in-progress (pre-saved) draft can be
+  // deleted outright — nothing to lose. Otherwise only finished games are
+  // deletable (an ongoing game with scores must be cancelled first).
+  const isEmpty =
+    game.rounds.length === 0 &&
+    !game.draftRound &&
+    !turnDraftHasData(game.draftTurn);
+  const canDelete = !!w || isEmpty;
 
   // Elapsed time since creation: live while ongoing, frozen once the game is
   // over (at the winning round).
@@ -530,7 +602,7 @@ function renderGame(id) {
             <button class="kebab-item" id="shareBtn"><i class="fa-regular fa-share-nodes"></i> Partager</button>
             ${defFor(game).manualEnd && !defFor(game).turnBased && !w && !game.cancelled && game.rounds.length ? `<button class="kebab-item" id="endGame"><i class="fa-regular fa-flag-checkered"></i> Terminer la partie</button>` : ""}
             ${game.cancelled ? "" : `<button class="kebab-item" id="cancel"><i class="fa-regular fa-ban"></i> Annuler</button>`}
-            <button class="kebab-item" id="del"${w ? "" : ' disabled title="Une partie en cours ne peut pas être supprimée — annulez-la d\'abord."'}><i class="fa-regular fa-trash-can"></i> Supprimer</button>
+            <button class="kebab-item" id="del"${canDelete ? "" : ' disabled title="Une partie en cours ne peut pas être supprimée — annulez-la d\'abord."'}><i class="fa-regular fa-trash-can"></i> Supprimer</button>
           </div>
         </div>
       </div>
@@ -612,11 +684,13 @@ function renderGame(id) {
     });
   }
   head.querySelector("#del").addEventListener("click", async () => {
-    if (!w) return; // ongoing games can't be deleted (button is disabled)
+    if (!canDelete) return; // disabled for ongoing games with scores
     closeMenu();
     const ok = await confirmDialog({
       title: "Supprimer la partie ?",
-      body: `« ${game.name} » et ses scores seront définitivement supprimés.`,
+      body: w
+        ? `« ${game.name} » et ses scores seront définitivement supprimés.`
+        : `« ${game.name} » sera définitivement supprimée.`,
       confirmLabel: "Supprimer",
       danger: true,
     });
@@ -714,6 +788,7 @@ function renderGame(id) {
         target: game.target,
         yamsChance: game.yamsChance,
         teams: game.players, // Time's Up!: carry over teams + their players
+        restartOf: game.id, // link the replay so other devices can offer to join
       }),
     );
   app.appendChild(linksWrap);
@@ -827,21 +902,24 @@ function renderStats() {
     { key: "yams", label: "Yam's" },
     { key: "bombu", label: "Bombu" },
   ];
-  let statMode = "flip7";
-  let statMetric = "wins";
+  // Selected version/metric come from the URL ("/[lieu]/stats/[jeu]/[type]");
+  // statMode falls back to "flip7", statMetric is validated per-mode in
+  // syncMetricControls (reset to "wins" when unavailable for the version).
+  const r = currentRoute();
+  let statMode = VERSIONS.some((v) => v.key === r.mode) ? r.mode : "flip7";
+  let statMetric = r.metric || "wins";
   const controls = el(`
     <div class="date-filter" id="versionFilter">
       ${VERSIONS.map((v) => `<button type="button" data-v="${v.key}" class="${v.key === statMode ? "active" : ""}">${v.label}</button>`).join("")}
     </div>`);
   const versionBtns = controls.querySelectorAll("button");
   versionBtns.forEach((b) =>
+    // Navigate so the URL reflects the version; keep the metric if it still
+    // exists for the new version, otherwise let it default to "wins".
     b.addEventListener("click", () => {
-      statMode = b.dataset.v;
-      versionBtns.forEach((x) =>
-        x.classList.toggle("active", x.dataset.v === statMode),
-      );
-      syncMetricControls();
-      draw();
+      const keys = metricsForVersion(b.dataset.v);
+      const metric = keys.includes(statMetric) ? statMetric : "wins";
+      go("stats", { mode: b.dataset.v, metric });
     }),
   );
   app.appendChild(controls);
@@ -853,10 +931,9 @@ function renderStats() {
       <select class="stat-metric-select"></select>
     </div>`);
   const metricSelect = metricControls.querySelector("select");
-  metricSelect.addEventListener("change", () => {
-    statMetric = metricSelect.value;
-    draw();
-  });
+  metricSelect.addEventListener("change", () =>
+    go("stats", { mode: statMode, metric: metricSelect.value }),
+  );
   app.appendChild(metricControls);
 
   function syncMetricControls() {
@@ -903,7 +980,11 @@ function renderStats() {
   // Expose the in-place redraw so polling can refresh the table while keeping
   // the selected version/metric filters (closures over statMode/statMetric).
   statsRedraw = draw;
-  syncMetricControls();
+  syncMetricControls(); // finalises statMetric (resets to "wins" if unavailable)
+  // Surface the resolved defaults in the URL: a bare "/[lieu]/stats" becomes
+  // "/[lieu]/stats/[jeu]/[type]". replaceRoute swaps the URL in place (no extra
+  // history entry, no re-render) so it can't loop back into renderStats.
+  replaceRoute("stats", { mode: statMode, metric: statMetric });
   draw();
 }
 

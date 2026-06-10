@@ -94,7 +94,12 @@ class AppScoreSummary extends HTMLElement {
         } else if (drew) {
           preview = '<span class="elim-tag">Pioche</span>';
         } else if (hasDraftFor(p)) {
-          preview = `<span class="score-preview"><i class="fa-regular fa-arrow-right-long"></i> ${projected[p.id]}${previewCrown}</span>`;
+          // Pastille de preview : prochain total puis, entre (), le score de la
+          // manche en cours de saisie (projeté − total actuel = valeur ajoutée),
+          // signé (+/−) pour montrer le sens de la variation.
+          const gain = projected[p.id] - p.total;
+          const signed = gain > 0 ? `+${gain}` : `${gain}`;
+          preview = `<span class="score-preview"><i class="fa-regular fa-arrow-right-long"></i> ${projected[p.id]} <span class="score-preview-delta">(${signed})</span>${previewCrown}</span>`;
         }
         // Team games (Time's Up!): list the team's players under its name.
         const sub =

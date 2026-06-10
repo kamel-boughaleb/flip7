@@ -122,6 +122,12 @@ function loadGames() {
 function getGame(id) {
   return GAMES.find((g) => g.id === id);
 }
+// The most recent game created as a replay of `id` (via the celebration's
+// "Rejouer" button, which stamps restartOf), or undefined. Lets a device still
+// on the finished game offer to join the new one.
+function replayOf(id) {
+  return loadGames().find((g) => g.restartOf === id);
+}
 
 /* ---------- write serialization ----------
    Supabase upserts are fire-and-forget, so two concurrent writes to the same
@@ -269,6 +275,7 @@ export {
   fetchPlaces,
   fetchGames,
   getGame,
+  replayOf,
   upsertGame,
   deleteGame,
   uid,
