@@ -16,7 +16,7 @@ class AppStatsTable extends HTMLElement {
   }
 
   render() {
-    const { stats, metric, mode } = this._d || {};
+    const { stats, metric, mode, showGames } = this._d || {};
     if (!stats || !metric) return;
     const labels = rankLabels(stats, metric.tie);
     const rows = stats
@@ -26,6 +26,7 @@ class AppStatsTable extends HTMLElement {
         return `<tr class="${place === 1 ? "winner-row" : ""}">
           <td class="rank-col"><span class="badge ${rc}">${label}</span></td>
           <td class="player-name">${esc(s.name)}</td>
+          ${showGames ? `<td class="games-col">${s.games}</td>` : ""}
           <td class="total-cell"><span class="score-badge ${rc}">${metric.value(s)}</span></td>
         </tr>`;
       })
@@ -36,6 +37,7 @@ class AppStatsTable extends HTMLElement {
           <thead><tr>
             <th class="rank-col">#</th>
             <th class="player-name">${unitLabel(mode)}</th>
+            ${showGames ? `<th class="games-col">Parties</th>` : ""}
             <th>${metricText(metric.valueHead, mode)}</th>
           </tr></thead>
           <tbody>${rows}</tbody>

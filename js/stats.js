@@ -134,6 +134,11 @@ function winRate(s) {
   if (!s.games) return 0;
   return Math.round((s.wins / s.games) * 100);
 }
+// Average eliminations (busted rounds) per game, rounded to a whole number.
+function avgElims(s) {
+  if (!s.games) return 0;
+  return Math.round(s.elims / s.games);
+}
 
 const STAT_METRICS = {
   wins: {
@@ -184,6 +189,13 @@ const STAT_METRICS = {
     sort: () => (a, b) => b.elims - a.elims || b.games - a.games,
     tie: (a, b) => a.elims === b.elims,
   },
+  avgElims: {
+    label: "Moyenne d'éliminations",
+    valueHead: "Élim./partie",
+    value: (s) => avgElims(s),
+    sort: () => (a, b) => avgElims(b) - avgElims(a) || b.games - a.games,
+    tie: (a, b) => avgElims(a) === avgElims(b),
+  },
   flip7s: {
     label: "Nombre de Flip 7",
     valueHead: "Flip 7",
@@ -222,7 +234,7 @@ const FLIP7_VERSIONS = new Set(["flip7", "classic", "vengeance"]);
 function metricsForVersion(mode) {
   const base = ["wins", "winrate", "games", "points", "average"];
   if (FLIP7_VERSIONS.has(mode))
-    return [...base, "elims", "flip7s", "bestGame", "bestRound"];
+    return [...base, "elims", "avgElims", "flip7s", "bestGame", "bestRound"];
   // Games with a meaningful single-game / single-round high score.
   if (["skyjo", "qwirkle", "yams", "timesup", "contree", "bombu"].includes(mode))
     return [...base, "bestGame", "bestRound"];
