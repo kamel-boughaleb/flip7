@@ -21,9 +21,31 @@ const RULESETS = {
     bonus: 15,
     scoreOrder: "desc", // higher total ranks first
     entry: "flip7", // score-entry UI variant
-    cellValue(cell) {
-      if (!cell || cell.bust) return 0;
-      return (Number(cell.points) || 0) + (cell.flip7 ? this.bonus : 0);
+    // The Vengeance "Mode Brutal" option (game.brutalMode) relaxes two rules:
+    // an eliminated player keeps the (possibly negative) round total entered for
+    // them, and a Flip 7 can be redirected — its +15 going to nobody while the
+    // chosen opponent takes −15 instead (handled cross-player in extraTotal).
+    cellValue(cell, game) {
+      if (!cell) return 0;
+      const brutal = !!(game && game.brutalMode);
+      // Eliminated: 0 outside Brutal; in Brutal the kept total is a malus, so it
+      // is forced negative (an eliminated player can never gain points).
+      if (cell.bust) return brutal ? -Math.abs(Number(cell.points) || 0) : 0;
+      const pts = Number(cell.points) || 0;
+      // The +15 only goes to its author when they didn't redirect it (flip7To).
+      return pts + (cell.flip7 && !cell.flip7To ? this.bonus : 0);
+    },
+    // Brutal only: each redirected Flip 7 inflicts −15 on the targeted player,
+    // summed across every round (an inter-player effect cellValue can't see).
+    extraTotal(game, playerId) {
+      if (!game || !game.brutalMode) return 0;
+      let delta = 0;
+      for (const r of game.rounds)
+        for (const k in r.scores) {
+          const c = r.scores[k];
+          if (c && c.flip7 && c.flip7To === playerId) delta -= this.bonus;
+        }
+      return delta;
     },
   },
   skyjo: {
@@ -287,6 +309,11 @@ function rulesetOf(mode) {
 function defFor(game) {
   return rulesetOf(game && game.mode);
 }
+// Flip 7 Vengeance "Mode Brutal" option (negative totals, scorable eliminated
+// players, redirectable Flip 7). Only ever set on Vengeance games.
+function brutalEnabled(game) {
+  return !!(game && game.mode === "vengeance" && game.brutalMode);
+}
 function modeLabel(mode) {
   return (MODES[mode] || MODES[DEFAULT_MODE]).label;
 }
@@ -408,16 +435,18 @@ function rulesVengeanceHTML() {
     </ul>
 
     <h3><i class="fa-regular fa-face-angry-horns"></i> Mode Brutal (variante)</h3>
+    <p>Activable à la création de la partie. Il change trois règles :</p>
     <ul>
       <li>Les scores d'une manche peuvent être <b>négatifs</b>.</li>
-      <li>Les modificateurs peuvent être donnés à un joueur même <b>éliminé</b>.</li>
+      <li>Les modificateurs peuvent être donnés à un joueur même <b>éliminé</b> : au lieu de marquer 0, il prend alors un <b>malus négatif</b>.</li>
       <li>En réalisant un Flip 7, au choix : <b>+15 pour vous</b> ou <b>−15 pour un adversaire</b>.</li>
     </ul>
 
     <h3><i class="fa-regular fa-mobile-screen-button"></i> Dans cette application</h3>
     <ul>
-      <li>Saisissez le total final de chaque joueur pour chaque manche — toutes les variantes (÷2, négatifs, mode Brutal) sont donc gérées par votre saisie.</li>
+      <li>Saisissez le total de chaque joueur pour chaque manche — les variantes ÷2 sont gérées par votre saisie.</li>
       <li>Cochez <b>« Flip 7 (+15) »</b> pour le bonus, ou <b>« Éliminé »</b> pour marquer 0.</li>
+      <li>En <b>Mode Brutal</b> : le bouton <b>±</b> permet un total <b>négatif</b>, un joueur <b>« Éliminé »</b> ne peut recevoir qu'un <b>malus négatif</b>, et activer <b>« Flip 7 »</b> propose de garder le <b>+15</b> ou de l'envoyer en <b>−15 à un adversaire</b>.</li>
       <li>Dans le <b>détail des scores</b>, tapez <b>« +15 »</b> dans une case (ex. « 10+15 ») pour activer ou retirer le bonus Flip 7.</li>
     </ul>`;
 }
@@ -642,6 +671,7 @@ export {
   DEFAULT_MODE,
   rulesetOf,
   defFor,
+  brutalEnabled,
   modeLabel,
   modeClass,
   rulesFor,

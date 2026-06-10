@@ -34,6 +34,7 @@ export function openEditPlayersDialog(game) {
   const locked = !!winner(game);
   let mode = MODES[game.mode] ? game.mode : DEFAULT_MODE;
   let yamsChance = !!game.yamsChance; // Yam's-only option: the Chance case
+  let brutalMode = !!game.brutalMode; // Vengeance-only option: the Brutal variant
   // Once Chance has been scored by anyone, it can't be turned off (doing so
   // would discard real scores) — the toggle stays locked on.
   const chancePlayed = game.rounds.some((r) => {
@@ -74,6 +75,16 @@ export function openEditPlayersDialog(game) {
           <span class="setup-opt-main">
             <span class="setup-opt-name">Chance</span>
             <span class="setup-opt-desc muted">${chancePlayed ? "Déjà jouée : la case ne peut plus être retirée." : "Ajoute une 13ᵉ case : la somme des 5 dés."}</span>
+          </span>
+          <span class="setup-opt-switch" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="field" id="brutalOptField" hidden>
+        <label>Options</label>
+        <button type="button" class="setup-opt${brutalMode ? " active" : ""}" id="brutalToggle" aria-pressed="${brutalMode}">
+          <span class="setup-opt-main">
+            <span class="setup-opt-name">Mode Brutal</span>
+            <span class="setup-opt-desc muted">Scores négatifs, joueur éliminé scorable, et Flip 7 à +15 pour soi ou −15 à un adversaire.</span>
           </span>
           <span class="setup-opt-switch" aria-hidden="true"></span>
         </button>
@@ -180,6 +191,8 @@ export function openEditPlayersDialog(game) {
   const targetInput = modal.querySelector("#targetInput");
   const yamsOptField = modal.querySelector("#yamsOptField");
   const yamsChanceToggle = modal.querySelector("#yamsChanceToggle");
+  const brutalOptField = modal.querySelector("#brutalOptField");
+  const brutalToggle = modal.querySelector("#brutalToggle");
   const teamsHint = modal.querySelector("#teamsHint");
   // Contrée: A = seats 1 & 3, B = seats 2 & 4. Live preview under the roster.
   const updateTeamsHint = () => {
@@ -196,6 +209,7 @@ export function openEditPlayersDialog(game) {
       addBtn.style.display = useTeamBuilder() || fixedCount() ? "none" : "";
     targetField.hidden = !rulesetOf(mode).configurableTarget;
     yamsOptField.hidden = mode !== "yams";
+    brutalOptField.hidden = mode !== "vengeance";
     mountRoster();
     updateTeamsHint();
   };
@@ -240,6 +254,12 @@ export function openEditPlayersDialog(game) {
     yamsChanceToggle.setAttribute("aria-pressed", String(yamsChance));
   });
 
+  brutalToggle.addEventListener("click", () => {
+    brutalMode = !brutalMode;
+    brutalToggle.classList.toggle("active", brutalMode);
+    brutalToggle.setAttribute("aria-pressed", String(brutalMode));
+  });
+
   const close = () => overlay.remove();
   modal
     .querySelectorAll("[data-act=close]")
@@ -275,6 +295,7 @@ export function openEditPlayersDialog(game) {
       g.mode = mode; // switching to/from Time's Up! is gated by the tab lock
       g.target = def.target;
       delete g.yamsChance;
+      delete g.brutalMode;
       upsertGame(g);
       overlay.remove();
       return go("game", { id });
@@ -322,6 +343,10 @@ export function openEditPlayersDialog(game) {
         return !(cell && cell.category === "chance");
       });
     }
+    // Vengeance Brutal option: a plain flag — toggling it just re-reads the
+    // existing rounds under the other ruleset (eliminated → 0 vs kept score).
+    if (safeMode === "vengeance" && brutalMode) g.brutalMode = true;
+    else delete g.brutalMode;
     upsertGame(g);
     overlay.remove();
     go("game", { id });

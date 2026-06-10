@@ -81,7 +81,7 @@ function computeStats(place, filter = "flip7") {
           const cell = r.scores[p.id];
           if (cell && cell.bust) agg.elims += 1;
           if (cell && cell.flip7 && !cell.bust) agg.flip7s += 1;
-          const rv = def.cellValue(cell);
+          const rv = def.cellValue(cell, g);
           if (isBetter(rv, agg.bestRound)) agg.bestRound = rv;
         });
       });

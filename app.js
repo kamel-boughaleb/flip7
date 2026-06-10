@@ -17,6 +17,7 @@ import "./js/components/logo.js"; // registers <app-logo>
 import "./js/components/game-card.js"; // registers <app-game-card>
 import "./js/components/stats-table.js"; // registers <app-stats-table>
 import "./js/components/score-summary.js"; // registers <app-score-summary>
+import { flashEliminated } from "./js/components/score-summary.js";
 import "./js/components/turn-table.js"; // registers <app-turn-table>
 import "./js/components/yams-table.js"; // registers <app-yams-table>
 import "./js/components/score-table.js"; // registers <app-score-table>
@@ -35,6 +36,7 @@ import {
   yamsComplete,
   CONTREE_SUITS,
   contreeSuit,
+  bombuContract,
   UNITS,
   MODES,
   DEFAULT_MODE,
@@ -90,6 +92,9 @@ import {
   getGame,
   replayOf,
   upsertGame,
+  localBustSet,
+  advanceFingerprint,
+  localAdvanceSig,
   deleteGame,
   getSelectedPlace,
   setSelectedPlace,
@@ -282,6 +287,10 @@ function startStatsPolling(immediate) {
 function startPolling(id, immediate) {
   stopPolling();
   if (!db) return; // nothing to sync from in local mode
+  // A replay that ALREADY exists when we land on this game isn't news: mark it
+  // known so the banner only fires for a replay created live while we watch —
+  // not every time we revisit an old, already-replayed game.
+  if (replayOf(id)) replayNotified.add(id);
   const onScoreScreen = () => currentRoute().name === "game" || currentRoute().name === "details";
   const tick = async () => {
     if (!onScoreScreen() || currentRoute().id !== id) return stopPolling();
@@ -299,6 +308,13 @@ function startPolling(id, immediate) {
     const after = JSON.stringify(getGame(id) || null);
     if (after !== before) {
       const g = getGame(id);
+      // Mirror the elimination flash on the OTHER players' screens: a player now
+      // busted that this device didn't bust itself was eliminated remotely.
+      flashRemoteEliminations(g);
+      toastRemoteAdvance(g); // round/turn change → toast, on the other devices only
+      // Let an open score dialog react to the sync (e.g. close itself if the
+      // round was just committed on another device).
+      document.dispatchEvent(new CustomEvent("flip7:gamechanged", { detail: id }));
       currentRoute().name === "details" ? renderDetails(id) : renderGame(id);
       // Only fires when the winner id actually changed, so it shows once.
       celebrateIfNewWinner(beforeWinnerId, g);
@@ -306,6 +322,83 @@ function startPolling(id, immediate) {
   };
   if (immediate) tick();
   pollTimer = setInterval(tick, 2000);
+}
+
+// Players currently busted in a game's in-progress draft.
+function draftBustSet(game) {
+  const s = new Set();
+  const d = game && game.draftRound;
+  if (d) for (const pid in d) if (d[pid] && d[pid].bust) s.add(pid);
+  return s;
+}
+// Busts this device has already accounted for per game (baseline on entry +
+// everything flashed so far), so a steady remote bust isn't re-flashed.
+const seenBusts = new Map();
+
+// Flash the elimination animation for any player who became busted remotely —
+// i.e. busted now, not yet seen here, and NOT authored by this device (the
+// emitter must never see its own elimination). Skipped on the details screen.
+function flashRemoteEliminations(game) {
+  if (!game || currentRoute().name !== "game") return;
+  const fetched = draftBustSet(game);
+  // First sighting of this game: just baseline, never flash pre-existing busts.
+  if (!seenBusts.has(game.id)) {
+    seenBusts.set(game.id, fetched);
+    return;
+  }
+  const seen = seenBusts.get(game.id);
+  const local = localBustSet(game.id);
+  const names = (game.players || [])
+    .filter((p) => fetched.has(p.id) && !seen.has(p.id) && !local.has(p.id))
+    .map((p) => p.name);
+  seenBusts.set(game.id, fetched);
+  names.forEach(flashEliminated);
+}
+
+// --- Advance toast (new manche / tour / case / main-contrat) -----------------
+// Every game progression is announced with a discreet toast on the OTHER
+// players' screens only (never the device that triggered it): a manche/donne
+// committed, a turn taken, a Yam's cell filled, a contract/bid announced.
+// Driven from the poll loop (a local commit's renderGame never reaches it) and
+// guarded by the authored fingerprint, so a change landing during a poll's
+// await still isn't toasted on the emitter.
+
+// The text to announce for a game's current advance state (null = nothing).
+function advanceText(game) {
+  const def = defFor(game);
+  if (def.entry === "bombu") {
+    const c = game.pendingContract ? bombuContract(game.pendingContract) : null;
+    return c ? `Contrat : ${c.label}` : null;
+  }
+  if (def.entry === "contree") {
+    const b = game.pendingBid;
+    if (!b) return null;
+    const s = contreeSuit(b.suit);
+    const val = b.contract === "capot" ? "Capot" : b.contract;
+    return `Contrat : ${val}${s ? " " + s.sym : ""}`;
+  }
+  if (def.turnBased) {
+    const cp = currentPlayer(game);
+    return cp ? `Au tour de ${cp.name}` : null;
+  }
+  const n = (game.rounds || []).length;
+  return roundNumberLabel(game, n + 1);
+}
+
+const seenAdvance = new Map();
+function toastRemoteAdvance(game) {
+  if (!game || currentRoute().name !== "game") return;
+  const fp = advanceFingerprint(game);
+  if (!seenAdvance.has(game.id)) {
+    seenAdvance.set(game.id, fp); // baseline on first sight, never toast it
+    return;
+  }
+  const prev = seenAdvance.get(game.id);
+  seenAdvance.set(game.id, fp);
+  if (prev === fp || winner(game)) return; // unchanged, or game over (celebration)
+  if (fp === localAdvanceSig(game.id)) return; // authored here → emitter, skip
+  const text = advanceText(game);
+  if (text) toast(text);
 }
 
 // (Re)start the polling appropriate to the current screen, without re-rendering.
@@ -549,6 +642,10 @@ function renderHome() {
 function renderGame(id) {
   const game = getGame(id);
   if (!game) return go("home");
+  // Baseline the elimination + advance trackers on entry so pre-existing state
+  // doesn't fire and the first remote change is still caught by the poll diff.
+  if (!seenBusts.has(id)) seenBusts.set(id, draftBustSet(game));
+  if (!seenAdvance.has(id)) seenAdvance.set(id, advanceFingerprint(game));
   app.innerHTML = "";
 
   const st = standings(game);
@@ -753,6 +850,9 @@ function renderGame(id) {
       app.appendChild(wrapPanel(buildBombuContractInfo(game)));
     const summary = document.createElement("app-score-summary");
     summary.game = game;
+    // Swipe-to-eliminate writes the round draft → re-render the game screen
+    // (refreshes the scoreboard preview and the "Reprendre la saisie" button).
+    summary.addEventListener("draftchanged", () => renderGame(id));
     app.appendChild(wrapPanel(summary));
     // Hide score entry once the game is won.
     if (!w) {
@@ -789,6 +889,7 @@ function renderGame(id) {
         mode: game.mode,
         target: game.target,
         yamsChance: game.yamsChance,
+        brutalMode: game.brutalMode,
         teams: game.players, // Time's Up!: carry over teams + their players
         restartOf: game.id, // link the replay so other devices can offer to join
       }),

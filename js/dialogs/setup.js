@@ -36,6 +36,7 @@ export function openSetupDialog(opts = {}) {
   let mode = opts.mode && MODES[opts.mode] ? opts.mode : DEFAULT_MODE;
   // Replaying a game carries its parameters over (target, Chance…).
   let yamsChance = !!opts.yamsChance; // Yam's-only option: add the Chance case
+  let brutalMode = !!opts.brutalMode; // Vengeance-only option: the Brutal variant
   // Time's Up! builds teams of named players here (carried over on replay/edit).
   // Only adopt incoming teams when the (replayed) game is itself a team-builder
   // game; otherwise opts.teams would be individual players, not real teams.
@@ -77,6 +78,16 @@ export function openSetupDialog(opts = {}) {
           <span class="setup-opt-switch" aria-hidden="true"></span>
         </button>
       </div>
+      <div class="field" id="brutalOptField" hidden>
+        <label>Options</label>
+        <button type="button" class="setup-opt${brutalMode ? " active" : ""}" id="brutalToggle" aria-pressed="${brutalMode}">
+          <span class="setup-opt-main">
+            <span class="setup-opt-name">Mode Brutal</span>
+            <span class="setup-opt-desc muted">Scores négatifs, joueur éliminé scorable, et Flip 7 à +15 pour soi ou −15 à un adversaire.</span>
+          </span>
+          <span class="setup-opt-switch" aria-hidden="true"></span>
+        </button>
+      </div>
       <div class="field">
         <label id="playersLabel">Joueurs</label>
         <div class="player-rows" id="rows"></div>
@@ -97,6 +108,8 @@ export function openSetupDialog(opts = {}) {
   const targetInput = modal.querySelector("#targetInput");
   const yamsOptField = modal.querySelector("#yamsOptField");
   const yamsChanceToggle = modal.querySelector("#yamsChanceToggle");
+  const brutalOptField = modal.querySelector("#brutalOptField");
+  const brutalToggle = modal.querySelector("#brutalToggle");
   const teamsHint = modal.querySelector("#teamsHint");
   const isTeams = () => rulesetOf(mode).teams;
   // Games with a fixed roster: Contrée (teams, 4) and Bombu (fixedPlayers: 4).
@@ -169,6 +182,7 @@ export function openSetupDialog(opts = {}) {
   const applyModeLayout = () => {
     targetField.hidden = !rulesetOf(mode).configurableTarget;
     yamsOptField.hidden = mode !== "yams";
+    brutalOptField.hidden = mode !== "vengeance";
     syncRoster(useTeamBuilder()); // carry names over when the roster type flips
     const fc = fixedCount();
     if (useTeamBuilder()) {
@@ -221,6 +235,12 @@ export function openSetupDialog(opts = {}) {
     yamsChance = !yamsChance;
     yamsChanceToggle.classList.toggle("active", yamsChance);
     yamsChanceToggle.setAttribute("aria-pressed", String(yamsChance));
+  });
+
+  brutalToggle.addEventListener("click", () => {
+    brutalMode = !brutalMode;
+    brutalToggle.classList.toggle("active", brutalMode);
+    brutalToggle.setAttribute("aria-pressed", String(brutalMode));
   });
 
   const close = () => overlay.remove();
@@ -298,6 +318,7 @@ export function openSetupDialog(opts = {}) {
       rounds: [],
     };
     if (mode === "yams" && yamsChance) game.yamsChance = true;
+    if (mode === "vengeance" && brutalMode) game.brutalMode = true;
     if (opts.restartOf) game.restartOf = opts.restartOf;
     upsertGame(game);
     overlay.remove();

@@ -70,10 +70,10 @@ export function gameNameFromDate(ts) {
   const m = String(d.getMinutes()).padStart(2, "0");
   return `Partie du ${date} à ${d.getHours()}h${m}`;
 }
-export function toast(msg) {
+export function toast(msg, ms = 3500) {
   const t = el(`<div class="toast">${esc(msg)}</div>`);
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 1800);
+  setTimeout(() => t.remove(), ms);
 }
 
 // Brand logo (home hero / setup header). The white variant is swapped in on
