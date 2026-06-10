@@ -1123,18 +1123,6 @@ input:focus {
   -webkit-overflow-scrolling: touch;
   /* vertical room so the active tab's glow isn't clipped by overflow-y:auto */
   padding: 0.5rem 0;
-  scrollbar-width: thin;
-  scrollbar-color: var(--teal-light) transparent;
-}
-.mode-tabs::-webkit-scrollbar {
-  height: 6px;
-}
-.mode-tabs::-webkit-scrollbar-thumb {
-  background: var(--teal-light);
-  border-radius: 999px;
-}
-.mode-tabs::-webkit-scrollbar-track {
-  background: transparent;
 }
 .mode-tab {
   appearance: none;
