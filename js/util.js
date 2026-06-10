@@ -30,6 +30,25 @@ export function fmtDate(ts) {
     year: "numeric",
   });
 }
+// Calendar-day key (local time), e.g. "2026-5-10". Same string ⇔ same day —
+// used to group the game list into per-day sections.
+export function dayKey(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+// Heading for a day separator: "Aujourd'hui", "Hier", else "lundi 10 juin"
+// (the year is appended only when it differs from the current one).
+export function dayHeading(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  if (dayKey(ts) === dayKey(now)) return "Aujourd'hui";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (dayKey(ts) === dayKey(yesterday)) return "Hier";
+  const opts = { weekday: "long", day: "numeric", month: "long" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString("fr-FR", opts);
+}
 // Human-readable duration, e.g. "1 h 23 min", "12 min 05 s", "45 s".
 export function fmtDuration(ms) {
   const total = Math.round(ms / 1000);

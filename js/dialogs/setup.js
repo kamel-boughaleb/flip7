@@ -265,6 +265,7 @@ export function openSetupDialog(opts = {}) {
         players: built,
         rounds: [],
       };
+      if (opts.restartOf) game.restartOf = opts.restartOf;
       upsertGame(game);
       overlay.remove();
       return go("game", { id: game.id });
@@ -297,6 +298,7 @@ export function openSetupDialog(opts = {}) {
       rounds: [],
     };
     if (mode === "yams" && yamsChance) game.yamsChance = true;
+    if (opts.restartOf) game.restartOf = opts.restartOf;
     upsertGame(game);
     overlay.remove();
     go("game", { id: game.id });
