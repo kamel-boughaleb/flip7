@@ -15,6 +15,15 @@ let route = { name: "place" };
 let renderCb = () => {};
 let lastHash = null; // the hash we set ourselves (to ignore our own hashchange)
 
+// "List" screens a game's "Retour" button returns to. We track the last one we
+// visited (with its filter / mode-metric) so leaving a game lands back where the
+// user came from — e.g. the "all"-filtered list, not the default "today" one.
+const LIST_SCREENS = new Set(["home", "stats"]);
+let lastListRoute = null;
+function rememberList(r) {
+  if (r && LIST_SCREENS.has(r.name)) lastListRoute = { ...r };
+}
+
 export function currentRoute() {
   return route;
 }
@@ -38,6 +47,7 @@ export function placeFromSlug(slug) {
 
 export function go(name, params = {}) {
   route = { name, ...params };
+  rememberList(route);
   const place = name === "place" ? null : getSelectedPlace();
   // params may carry id / filter / mode / metric — forward them all to buildPath.
   const hash = "#" + buildPath({ name, place, ...params });
@@ -45,6 +55,14 @@ export function go(name, params = {}) {
   if (location.hash !== hash) location.hash = hash; // fires hashchange (ignored)
   renderCb();
   window.scrollTo(0, 0);
+}
+
+// Leave a game/details screen back to the last list screen we came from,
+// preserving its filter (home) or game-mode/metric (stats). Falls back to the
+// games list when there's no remembered list (e.g. a direct deep link).
+export function goBack() {
+  const { name, ...params } = lastListRoute || { name: "home" };
+  go(name, params);
 }
 
 // Rewrite the URL to the canonical form of the current route WITHOUT navigating
@@ -74,6 +92,7 @@ export async function applyLocation() {
   // above): id for game screens, filter for home, mode/metric for stats.
   const { placeSlug, ...rest } = r;
   route = rest;
+  rememberList(route);
   renderCb();
   window.scrollTo(0, 0);
 }

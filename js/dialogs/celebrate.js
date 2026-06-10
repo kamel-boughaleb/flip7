@@ -1,6 +1,6 @@
 /* Victory celebration: a full-screen overlay (auto-dismiss after 10s) with a
    randomized message + confetti, shown when a brand-new winner appears. */
-import { el, esc } from "../util.js";
+import { el, esc, logoMarkup } from "../util.js";
 import { winner, winners } from "../scoring.js";
 import { MODES } from "../rules.js";
 import { openSetupDialog } from "./setup.js";
@@ -68,18 +68,6 @@ const MODE_CONGRATS = {
     "Aucun pli de trop pour toi !",
   ],
 };
-const CEL_EMOJIS = [
-  "party-horn",
-  "trophy",
-  "face-party",
-  "burst",
-  "crown",
-  "sparkles",
-  "fire",
-  "hand-fist",
-  "rocket",
-  "face-grin-stars",
-].map((name) => `<i class="fa-regular fa-${name}"></i>`);
 // Shown when several players/teams tie for the win.
 const TIE_CONGRATS = [
   "Égalité parfaite !",
@@ -88,9 +76,6 @@ const TIE_CONGRATS = [
   "À égalité au sommet !",
   "Tout le monde sur la plus haute marche !",
 ];
-const TIE_EMOJIS = ["handshake", "scale-balanced", "people-group", "medal"].map(
-  (name) => `<i class="fa-regular fa-${name}"></i>`,
-);
 
 function celConfettiMarkup(n = 70) {
   const colors = [
@@ -117,7 +102,7 @@ function celConfettiMarkup(n = 70) {
 }
 
 // Deterministic 32-bit hash of a string (FNV-1a). Lets every device seed the
-// message/emoji/animation from the shared game.id, so the celebration screen
+// message and animation from the shared game.id, so the celebration screen
 // is identical across the party instead of each device picking at random.
 function hashStr(s) {
   let h = 2166136261;
@@ -138,12 +123,10 @@ function celebrate(game) {
   const pool = tie
     ? TIE_CONGRATS
     : [...GENERAL_CONGRATS, ...(MODE_CONGRATS[family] || [])];
-  const emojiPool = tie ? TIE_EMOJIS : CEL_EMOJIS;
-  // Seed from the shared game id; different bit-shifts decorrelate the three
-  // picks while keeping them identical on every device.
+  // Seed from the shared game id; different bit-shifts decorrelate the message
+  // and animation picks while keeping them identical on every device.
   const seed = hashStr(game.id || "");
   const text = pool[seed % pool.length];
-  const emoji = emojiPool[(seed >>> 8) % emojiPool.length];
   const names = ws.map((p) => esc(p.name)).join(" & ");
   // Single team winner (Time's Up!): show its players under the team name.
   const sub =
@@ -155,14 +138,14 @@ function celebrate(game) {
     <div class="celebrate ${variant}">
       ${celConfettiMarkup()}
       <div class="cel-inner">
-        <div class="cel-emoji">${emoji}</div>
+        <div class="cel-logo">${logoMarkup()}</div>
         <div class="cel-title">${esc(text)}</div>
         <div class="cel-name">${names}</div>
         ${sub}
         <div class="cel-score">${ws[0].total} points <i class="fa-regular fa-trophy"></i></div>
         <div class="cel-actions">
           <button class="btn btn-primary cel-close">Continuer</button>
-          <button class="btn btn-restart cel-restart"><i class="fa-regular fa-arrows-rotate"></i> Rejouer</button>
+          <button class="btn btn-ghost cel-restart"><i class="fa-regular fa-arrows-rotate"></i> Rejouer</button>
         </div>
       </div>
     </div>`);

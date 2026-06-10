@@ -74,6 +74,7 @@ import {
 import { parsePath } from "./js/router.js";
 import {
   go,
+  goBack,
   applyLocation,
   currentRoute,
   onRender,
@@ -586,7 +587,7 @@ function renderGame(id) {
       <button class="back-btn" id="back"><i class="fa-regular fa-arrow-left"></i> Retour</button>
       <span class="badge ${modeClass(game.mode)} ml-auto">${esc(modeLabel(game.mode))}</span>
     </div>`);
-  backRow.querySelector("#back").addEventListener("click", () => go("home"));
+  backRow.querySelector("#back").addEventListener("click", () => goBack());
 
   const head = el(`
     <div class="game-head game-head-stacked">
@@ -973,7 +974,8 @@ function renderStats() {
     }
 
     const tableEl = document.createElement("app-stats-table");
-    tableEl.data = { stats, metric, mode: statMode };
+    // "games" already shows the count as its main column — skip the duplicate.
+    tableEl.data = { stats, metric, mode: statMode, showGames: statMetric !== "games" };
     content.appendChild(tableEl);
   }
 
@@ -1009,16 +1011,48 @@ function renderStats() {
   );
 })();
 
-/* ---------- boot ---------- */
-(async function boot() {
-  app.innerHTML = `<div class="panel-wrap"><div class="empty">Chargement…</div></div>`;
-  await fetchPlaces();
-  const r = parsePath(currentHashPath());
-  if (r.name === "place" && getSelectedPlace() !== null) {
-    // Landing on "/" with a remembered place: jump to its home (updates the URL).
-    await fetchGames(getSelectedPlace());
-    go("home");
-  } else {
-    await applyLocation();
+/* ---------- launch screen + boot ---------- */
+// The splash (index.html) stays up until BOTH a minimum display time has
+// elapsed AND the app has finished booting — whichever is later — then fades
+// out. A safety timeout hides it regardless, so a hung boot never traps the
+// user behind the splash.
+(function startup() {
+  const MIN_SPLASH_MS = 2000; // minimum time the splash stays visible
+  const SAFETY_MS = 8000; // hard cap: hide even if the boot hangs
+  let hidden = false;
+  function hideLaunch() {
+    if (hidden) return;
+    hidden = true;
+    clearTimeout(safety);
+    const launch = document.getElementById("launch-screen");
+    if (!launch) return;
+    launch.classList.add("is-hiding"); // CSS fades opacity to 0
+    // Drop the node after the fade — transitionend, with a timed fallback in
+    // case it doesn't fire.
+    launch.addEventListener("transitionend", () => launch.remove(), {
+      once: true,
+    });
+    setTimeout(() => launch.remove(), 700);
   }
+  const safety = setTimeout(hideLaunch, SAFETY_MS);
+  const minDelay = new Promise((r) => setTimeout(r, MIN_SPLASH_MS));
+
+  (async function boot() {
+    app.innerHTML = `<div class="panel-wrap"><div class="empty">Chargement…</div></div>`;
+    await fetchPlaces();
+    const r = parsePath(currentHashPath());
+    if (r.name === "place" && getSelectedPlace() !== null) {
+      // Landing on "/" with a remembered place: jump to its home (updates URL).
+      await fetchGames(getSelectedPlace());
+      go("home");
+    } else {
+      await applyLocation();
+    }
+  })()
+    .catch((e) => console.error(e))
+    // Hide once the boot settled (success or error) AND the minimum elapsed.
+    .finally(async () => {
+      await minDelay;
+      hideLaunch();
+    });
 })();

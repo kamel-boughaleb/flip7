@@ -47,8 +47,63 @@
         document.head.appendChild(l);
       })();
     </script>
+    <style>
+      /* Écran de lancement (splash) — styles critiques en inline pour couvrir
+         l'écran dès le premier paint, sans attendre styles.css (asynchrone).
+         app.js le masque (classe "is-hiding") une fois le délai minimum écoulé
+         ET le boot terminé, puis retire le nœud du DOM. */
+      #launch-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: grid;
+        place-items: center;
+        background: #fff8e7;
+        transition: opacity 0.5s ease;
+      }
+      #launch-screen.is-hiding {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #launch-screen img {
+        width: min(20rem, 70vw);
+        height: auto;
+        animation: launch-logo-in 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+      }
+      @media (prefers-color-scheme: dark) {
+        #launch-screen {
+          background: #0f1f1d;
+        }
+      }
+      @keyframes launch-logo-in {
+        0% {
+          opacity: 0;
+          transform: scale(0.82);
+        }
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      /* Réduit le mouvement : pas de zoom du logo (le fondu de sortie reste,
+         ce n'est qu'une transition d'opacité). */
+      @media (prefers-reduced-motion: reduce) {
+        #launch-screen img {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
+    <!-- Écran de lancement (splash), affiché à chaque ouverture puis masqué en
+         fondu (voir le <style> critique dans le <head>). -->
+    <div id="launch-screen" aria-hidden="true">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="img/logo_white.svg" />
+        <img src="img/logo_color.svg" alt="Kigagne ?" />
+      </picture>
+    </div>
+
     <header class="topbar">
       <h1 class="logo" id="homeBtn">
         <picture>
