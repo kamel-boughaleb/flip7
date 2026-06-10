@@ -150,9 +150,6 @@ body {
   width: auto;
   display: block;
 }
-.tagline {
-  display: none;
-}
 .topbar-btn {
   margin-left: auto;
   appearance: none;
@@ -847,12 +844,6 @@ input:focus {
 }
 .link-btn:disabled:hover {
   color: var(--teal-dark);
-}
-.link-btn-danger {
-  color: var(--error);
-}
-.link-btn-danger:hover {
-  color: var(--coral-dark);
 }
 
 /* rules tabs */
@@ -1819,12 +1810,6 @@ tfoot td .btn-icon {
   flex-direction: column;
   gap: 0.625rem;
 }
-.dealer-note {
-  text-align: center;
-  color: var(--teal-dark);
-  font-weight: 700;
-  font-size: 0.9rem;
-}
 /* current bid shown as a white card above the scoreboard (no left border):
    dealer on the left, bid opposed on the right */
 .bid-info {
@@ -1881,26 +1866,6 @@ tfoot td .btn-icon {
 .contract-msg.fail {
   background: rgba(239, 108, 74, 0.14);
   color: var(--coral-dark);
-}
-/* current-bid banner (score dialog) */
-.bid-banner {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  justify-content: center;
-  margin-bottom: 1rem;
-  padding: 0.75rem 1rem;
-  background: var(--teal-bg);
-  border: 1.5px solid rgba(111, 158, 105, 0.3);
-  border-left: 6px solid var(--contree);
-  border-radius: var(--r-lg);
-  font-size: 0.95rem;
-}
-.bid-label {
-  font-weight: 800;
-  color: var(--contree-dark);
-  margin-right: 0.25rem;
 }
 .bid-contract {
   font-weight: 800;
@@ -2562,18 +2527,6 @@ body:has(.overlay) {
     opacity: 1;
   }
 }
-@keyframes cel-emoji-bounce {
-  0%,
-  100% {
-    transform: translateY(0) rotate(0);
-  }
-  25% {
-    transform: translateY(-14px) rotate(-10deg);
-  }
-  75% {
-    transform: translateY(-14px) rotate(10deg);
-  }
-}
 @keyframes cel-fall {
   0% {
     transform: translateY(-10vh) rotate(0);
@@ -2605,9 +2558,6 @@ body:has(.overlay) {
   }
   .logo img {
     height: 1.875rem;
-  }
-  .tagline {
-    font-size: 0.75rem;
   }
   .place-btn {
     max-width: 52vw;
@@ -2728,9 +2678,6 @@ body:has(.overlay) {
 @media (max-width: 23.75rem) {
   .brand-logo img {
     width: 80vw;
-  }
-  .tagline {
-    display: none;
   }
 }
 
