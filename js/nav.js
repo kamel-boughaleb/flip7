@@ -2,7 +2,13 @@
    Navigation shell: owns the current route + hash plumbing, decoupled from
    rendering. The app registers a render callback via onRender(); screens and
    components navigate with go() without importing back into app.js. */
-import { parsePath, buildPath, slugify, NO_PLACE_SLUG } from "./router.js";
+import {
+  parsePath,
+  buildPath,
+  slugify,
+  migrateLegacyPath,
+  NO_PLACE_SLUG,
+} from "./router.js";
 import {
   getSelectedPlace,
   setSelectedPlace,
@@ -78,8 +84,20 @@ export function replaceRoute(name, params = {}) {
   if (location.hash !== hash) history.replaceState(null, "", hash);
 }
 
+// Rewrite a stale link from the pre-hash-routing scheme ("#home?p=Chalucet",
+// "#game/abc?p=Bureau", …) into the current "#/lieu/…" form, in place — no
+// history entry, no hashchange. Idempotent: a no-op once the URL is canonical.
+export function migrateLegacyHash() {
+  const migrated = migrateLegacyPath(currentHashPath());
+  if (migrated == null) return;
+  const hash = "#" + migrated;
+  lastHash = hash;
+  history.replaceState(null, "", hash);
+}
+
 // Apply the route described by the current URL (back/forward, deep link).
 export async function applyLocation() {
+  migrateLegacyHash(); // upgrade old "#name?p=" links before parsing
   const r = parsePath(currentHashPath());
   lastHash = location.hash;
   if (r.name !== "place") {

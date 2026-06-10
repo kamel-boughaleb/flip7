@@ -76,6 +76,7 @@ import {
   go,
   goBack,
   applyLocation,
+  migrateLegacyHash,
   currentRoute,
   onRender,
   currentHashPath,
@@ -1040,6 +1041,7 @@ function renderStats() {
   (async function boot() {
     app.innerHTML = `<div class="panel-wrap"><div class="empty">Chargement…</div></div>`;
     await fetchPlaces();
+    migrateLegacyHash(); // upgrade old "#name?p=" links so the parse below sees the current form
     const r = parsePath(currentHashPath());
     if (r.name === "place" && getSelectedPlace() !== null) {
       // Landing on "/" with a remembered place: jump to its home (updates URL).

@@ -77,3 +77,32 @@ export function buildPath({ name, place, id, filter, mode, metric } = {}) {
     return `/${p}/${encodeURIComponent(filter)}`;
   return `/${p}/`; // home (and any name without the data it needs)
 }
+
+// Routes the legacy scheme exposed before the hash router. Anything else falls
+// back to "home" (the place's games list).
+const LEGACY_NAMES = new Set(["home", "stats", "game", "details", "entry"]);
+
+// Pure: map a stale route-path from the pre-hash-routing scheme to the current
+// one, or null when the path is already in the current form (so the caller can
+// leave it alone).
+//
+// Old scheme: the route name leads and the place rides in a "?p=" query param —
+//   "home?p=Chalucet" · "game/abc?p=Bureau" · "stats?p=Maison" · "place".
+// Current scheme always leads with "/" (the place slug), so any path that does
+// not is treated as legacy. The empty/missing place maps to "/" (place picker).
+export function migrateLegacyPath(routePath) {
+  const raw = String(routePath || "");
+  if (raw === "" || raw.startsWith("/")) return null; // already current form
+  const [pathPart, queryPart] = raw.split("?");
+  const [name, id] = pathPart.split("/");
+
+  let place = null;
+  if (queryPart) {
+    const params = new URLSearchParams(queryPart);
+    if (params.has("p")) place = params.get("p"); // already URI-decoded
+  }
+  if (place == null) return "/"; // no "?p=" (e.g. "#place") → place picker
+
+  // Reuse buildPath so slugging/encoding/the "Sans lieu" sentinel stay in sync.
+  return buildPath({ name: LEGACY_NAMES.has(name) ? name : "home", place, id });
+}
