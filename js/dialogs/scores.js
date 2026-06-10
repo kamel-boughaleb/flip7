@@ -1,7 +1,7 @@
 /* Score-entry dialogs for round-based games: per-player entry rows, the
    multi-player "Nouveaux scores" dialog, and the screen-2 round editor. */
 import { el, esc, toast } from "../util.js";
-import { getGame, upsertGame } from "../store.js";
+import { getGame, upsertGame, dropPendingWrite } from "../store.js";
 import { defFor, brutalEnabled } from "../rules.js";
 import { winner } from "../scoring.js";
 import { celebrateIfNewWinner } from "./celebrate.js";
@@ -278,13 +278,8 @@ function buildRoundEntry(game) {
   // draft holds entry state per player
   const draft = {};
   const refreshBadges = () => refreshFlip7Badges(grid, game, draft);
-  game.players.forEach((p) => {
-    draft[p.id] = { points: "", flip7: false, flip7To: null, bust: false };
-    grid.appendChild(buildEntryRow(game, draft, p, null, refreshBadges));
-  });
-  refreshBadges();
 
-  section.querySelector("#saveRound").addEventListener("click", () => {
+  const commitRound = () => {
     const def = defFor(game);
     const scores = {};
     game.players.forEach((p) => {
@@ -297,7 +292,20 @@ function buildRoundEntry(game) {
     toast(`Manche ${g.rounds.length} enregistrée`);
     go("game", { id: game.id });
     celebrateIfNewWinner(beforeWinnerId, g);
+  };
+
+  // Auto-commit once every player is eliminated (round fully decided), like the
+  // swipe-to-eliminate flow on the scoreboard.
+  const allBust = () => game.players.every((p) => draft[p.id] && draft[p.id].bust);
+  const onChange = () => allBust() && commitRound();
+
+  game.players.forEach((p) => {
+    draft[p.id] = { points: "", flip7: false, flip7To: null, bust: false };
+    grid.appendChild(buildEntryRow(game, draft, p, onChange, refreshBadges));
   });
+  refreshBadges();
+
+  section.querySelector("#saveRound").addEventListener("click", commitRound);
 
   return section;
 }
@@ -312,6 +320,9 @@ function openScoresDialog(game) {
 
   const saved = game.draftRound || {};
   const draft = {};
+  // Round count when the dialog opened — if it grows while we're open, someone
+  // else committed this round and our entry is now stale (see onGameChanged).
+  const startRounds = game.rounds.length;
 
   modal.innerHTML = `
     <div class="rules-dialog-head">
@@ -339,38 +350,15 @@ function openScoresDialog(game) {
     saveTimer = setTimeout(writeDraft, 400);
   };
 
-  const grid = modal.querySelector("#entryGrid");
-  const refreshBadges = () => refreshFlip7Badges(grid, game, draft);
-  game.players.forEach((p) => {
-    const s = saved[p.id] || {};
-    draft[p.id] = {
-      points: s.points != null && s.points !== "" ? String(s.points) : "",
-      flip7: !!s.flip7,
-      flip7To: s.flip7To || null,
-      bust: !!s.bust,
-    };
-    grid.appendChild(buildEntryRow(game, draft, p, saveDraftSoon, refreshBadges));
-  });
-  refreshBadges();
+  // Stop listening for remote syncs — called from every close path.
+  const stopWatching = () =>
+    document.removeEventListener("flip7:gamechanged", onGameChanged);
 
-  // Leaving the dialog (×, Annuler, click outside) flushes the pending pre-save
-  // so the in-progress round can be resumed later.
-  const closeKeepingDraft = () => {
-    clearTimeout(saveTimer);
-    writeDraft();
-    overlay.remove();
-    if (currentRoute().name === "game" && currentRoute().id === game.id) go("game", { id: game.id });
-  };
-  modal
-    .querySelector("[data-act=close]")
-    .addEventListener("click", closeKeepingDraft);
-  modal.querySelector("#cancelRound").addEventListener("click", closeKeepingDraft);
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) closeKeepingDraft();
-  });
-
-  modal.querySelector("#saveRound").addEventListener("click", () => {
+  // Commit the in-progress round and return to the scoreboard. Shared by the
+  // "Enregistrer" button and the auto-commit below.
+  const commitRound = () => {
     clearTimeout(saveTimer); // cancel any pending draft write
+    stopWatching();
     const def = defFor(game);
     const scores = {};
     game.players.forEach((p) => {
@@ -385,7 +373,64 @@ function openScoresDialog(game) {
     toast(`Manche ${g.rounds.length} enregistrée`);
     go("game", { id: game.id });
     celebrateIfNewWinner(beforeWinnerId, g);
+  };
+
+  // The round was committed (or the game ended) on another device while this
+  // dialog was open: close it and discard our now-stale draft, dropping any
+  // queued draft write so it can't overwrite the committed state.
+  const closeStale = () => {
+    clearTimeout(saveTimer);
+    dropPendingWrite(game.id);
+    stopWatching();
+    overlay.remove();
+    toast("Manche enregistrée par un autre joueur");
+    if (currentRoute().name === "game" && currentRoute().id === game.id)
+      go("game", { id: game.id });
+  };
+  const onGameChanged = (e) => {
+    if (e.detail !== game.id) return;
+    const g = getGame(game.id);
+    if (!g || winner(g) || g.rounds.length > startRounds) closeStale();
+  };
+  document.addEventListener("flip7:gamechanged", onGameChanged);
+
+  // When EVERY player is eliminated the round is fully decided (no scores left
+  // to enter): commit it straight away, mirroring the swipe-to-eliminate flow.
+  const allBust = () => game.players.every((p) => draft[p.id] && draft[p.id].bust);
+  const onChange = () => (allBust() ? commitRound() : saveDraftSoon());
+
+  const grid = modal.querySelector("#entryGrid");
+  const refreshBadges = () => refreshFlip7Badges(grid, game, draft);
+  game.players.forEach((p) => {
+    const s = saved[p.id] || {};
+    draft[p.id] = {
+      points: s.points != null && s.points !== "" ? String(s.points) : "",
+      flip7: !!s.flip7,
+      flip7To: s.flip7To || null,
+      bust: !!s.bust,
+    };
+    grid.appendChild(buildEntryRow(game, draft, p, onChange, refreshBadges));
   });
+  refreshBadges();
+
+  // Leaving the dialog (×, Annuler, click outside) flushes the pending pre-save
+  // so the in-progress round can be resumed later.
+  const closeKeepingDraft = () => {
+    clearTimeout(saveTimer);
+    stopWatching();
+    writeDraft();
+    overlay.remove();
+    if (currentRoute().name === "game" && currentRoute().id === game.id) go("game", { id: game.id });
+  };
+  modal
+    .querySelector("[data-act=close]")
+    .addEventListener("click", closeKeepingDraft);
+  modal.querySelector("#cancelRound").addEventListener("click", closeKeepingDraft);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeKeepingDraft();
+  });
+
+  modal.querySelector("#saveRound").addEventListener("click", commitRound);
 
   root.appendChild(overlay);
 }

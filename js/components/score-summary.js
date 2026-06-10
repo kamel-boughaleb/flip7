@@ -4,7 +4,7 @@
    Rendered as a div list (not a table): on Flip 7, a row can be swiped left to
    toggle that player's elimination for the in-progress round, without opening
    the score-entry dialog. */
-import { esc, toast } from "../util.js";
+import { esc, toast, el } from "../util.js";
 import { defFor, brutalEnabled } from "../rules.js";
 import { getGame, upsertGame } from "../store.js";
 import { draftToCell } from "../dialogs/scores.js";
@@ -17,6 +17,51 @@ import {
   rankLabels,
   turnDraftHasData,
 } from "../scoring.js";
+
+// Full-screen flash when a player gets eliminated: their name struck through
+// over an opaque red backdrop. Exported so the polling loop can replay it when
+// ANOTHER device does the elimination. A single overlay is reused: successive
+// eliminations stack their names below the first and keep the overlay alive,
+// so a burst of eliminations reads as one growing list rather than a flicker
+// of overlapping overlays. Tapping dismisses early.
+let activeFlash = null;
+export function flashEliminated(name) {
+  if (activeFlash) {
+    activeFlash.add(name);
+    return;
+  }
+  const overlay = el(`<div class="elim-flash"><div class="elim-flash-list"></div></div>`);
+  const list = overlay.querySelector(".elim-flash-list");
+  let leaveTimer = 0,
+    killTimer = 0;
+  const remove = () => {
+    if (!activeFlash) return;
+    activeFlash = null;
+    clearTimeout(leaveTimer);
+    clearTimeout(killTimer);
+    overlay.remove();
+  };
+  const startLeave = () => {
+    overlay.classList.add("is-leaving");
+    killTimer = setTimeout(remove, 320); // matches the CSS fade-out
+  };
+  // (Re)arm the dismiss countdown; each new name pushes it back so the whole
+  // list stays up long enough to be read.
+  const scheduleLeave = () => {
+    clearTimeout(leaveTimer);
+    clearTimeout(killTimer);
+    overlay.classList.remove("is-leaving");
+    leaveTimer = setTimeout(startLeave, 1600);
+  };
+  const add = (n) => {
+    list.appendChild(el(`<div class="elim-flash-name">${esc(n)}</div>`));
+    scheduleLeave();
+  };
+  activeFlash = { add, remove };
+  overlay.addEventListener("click", remove);
+  add(name);
+  document.body.appendChild(overlay);
+}
 
 class AppScoreSummary extends HTMLElement {
   set game(g) {
@@ -223,6 +268,8 @@ class AppScoreSummary extends HTMLElement {
     if (cur.bust) {
       cur.flip7 = false;
       cur.flip7To = null;
+      // No flash on the emitting device — only the OTHER devices replay it,
+      // driven by the polling diff in app.js (flashRemoteEliminations).
     }
     draft[pid] = cur;
     // If EVERY player is now eliminated the round is fully decided (no scores

@@ -114,6 +114,51 @@ async function fetchGames(place) {
   } else {
     GAMES = fresh;
   }
+  // Prune authored-bust markers down to what's still busted in the synced state:
+  // a deal committed or a player restored elsewhere should no longer be treated
+  // as a local bust (else a later remote re-elimination would be suppressed).
+  localBusts.forEach((set, id) => {
+    const live = bustSetOf(getGame(id));
+    set.forEach((pid) => live.has(pid) || set.delete(pid));
+    if (!set.size) localBusts.delete(id);
+  });
+}
+
+/* ---------- locally-authored eliminations ----------
+   The set of players THIS device has marked eliminated in each game's
+   in-progress draft. The polling loop uses it to suppress the elimination flash
+   for the emitting device — the flash is meant for the OTHER players' screens.
+   Updated synchronously on every local write (upsertGame), so it is correct
+   even when a swipe lands during a poll's await; pruned on fetchGames so a
+   remote commit/restore that clears a bust drops it (no stale suppression). */
+const localBusts = new Map(); // game id -> Set<pid>
+function bustSetOf(game) {
+  const s = new Set();
+  const d = game && game.draftRound;
+  if (d) for (const pid in d) if (d[pid] && d[pid].bust) s.add(pid);
+  return s;
+}
+function localBustSet(id) {
+  return localBusts.get(id) || new Set();
+}
+
+// Fingerprint of the "advance" state — round count, pending contract/bid,
+// starter, dealer — so the polling loop can tell a progression THIS device
+// triggered (committed a round/turn, announced a contract) from one another
+// device did. The advance toast is for the other players, not the emitter.
+function advanceFingerprint(game) {
+  if (!game) return "";
+  return JSON.stringify({
+    r: (game.rounds || []).length,
+    c: game.pendingContract || null,
+    b: game.pendingBid || null,
+    s: game.starter || null,
+    d: game.dealer || null,
+  });
+}
+const localAdvance = new Map(); // game id -> fingerprint last written here
+function localAdvanceSig(id) {
+  return localAdvance.get(id) || "";
 }
 
 function loadGames() {
@@ -169,6 +214,11 @@ function upsertGame(game) {
   const i = GAMES.findIndex((g) => g.id === game.id);
   if (i >= 0) GAMES[i] = game;
   else GAMES.push(game);
+  // This device authored the current state, so its busts and advance state are
+  // "local" — recorded so the polling loop won't flash/toast them back at the
+  // emitter.
+  localBusts.set(game.id, bustSetOf(game));
+  localAdvance.set(game.id, advanceFingerprint(game));
   if (!db) return localSave();
   // Snapshot the state at call time so each queued write carries its own data.
   const data = JSON.parse(JSON.stringify(game));
@@ -176,6 +226,15 @@ function upsertGame(game) {
   if (!w) writers.set(game.id, (w = { inFlight: false, pending: null }));
   w.pending = data; // coalesce: only the latest state needs to reach the server
   flushWrite(game.id);
+}
+// Cancel a queued (not-yet-sent) write for a game. Used when a score dialog is
+// closed because the round was committed elsewhere: we must not push the now
+// stale draft back over the freshly committed state.
+function dropPendingWrite(id) {
+  const w = writers.get(id);
+  if (!w) return;
+  w.pending = null;
+  if (!w.inFlight) writers.delete(id);
 }
 async function deleteGame(id) {
   GAMES = GAMES.filter((g) => g.id !== id);
@@ -277,6 +336,10 @@ export {
   getGame,
   replayOf,
   upsertGame,
+  localBustSet,
+  advanceFingerprint,
+  localAdvanceSig,
+  dropPendingWrite,
   deleteGame,
   uid,
   getSelectedPlace,

@@ -1773,6 +1773,80 @@ table.score .eliminated-row .player-name {
   font-size: 1.5rem; /* subtle grow once past the trigger threshold */
 }
 
+/* Plein écran à l'élimination d'un joueur : nom barré sur fond rouge opaque.
+   Une seule couche est réutilisée ; les éliminations successives empilent leurs
+   noms dans .elim-flash-list. Le fondu de sortie est piloté par .is-leaving (JS)
+   pour que la durée s'allonge tant que de nouveaux noms arrivent. */
+.elim-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 90; /* au-dessus des toasts (30), sous la célébration (100) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(212, 82, 51, 0.55); /* --coral-dark, translucide */
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  animation: elim-flash-in 0.18s ease forwards;
+  transition: opacity 0.3s ease;
+}
+.elim-flash.is-leaving {
+  opacity: 0;
+}
+.elim-flash-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35em;
+  max-width: 90vw;
+}
+.elim-flash-name {
+  position: relative;
+  color: #fff;
+  font-weight: 800;
+  font-size: clamp(1.75rem, 10vw, 4rem); /* même taille pour tous les noms */
+  text-align: center;
+  line-height: 1.1;
+  word-break: break-word;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  animation: elim-flash-name 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.elim-flash-name::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -4%;
+  height: 0.12em;
+  width: 0;
+  transform: translateY(-50%);
+  border-radius: 0.06em;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+  animation: elim-flash-bar 0.55s ease 0.18s forwards;
+}
+@keyframes elim-flash-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes elim-flash-name {
+  0% { transform: scale(0.7); opacity: 0; }
+  60% { transform: scale(1.06); }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes elim-flash-bar {
+  from { width: 0; }
+  to { width: 108%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .elim-flash,
+  .elim-flash-name,
+  .elim-flash-name::after {
+    animation-duration: 0.01ms;
+  }
+  .elim-flash-name::after { width: 108%; }
+}
+
 tfoot td {
   padding-top: 0.625rem;
 }
