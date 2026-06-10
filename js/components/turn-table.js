@@ -33,7 +33,7 @@ class AppTurnTable extends HTMLElement {
             const cell = r.scores[pid] || { points: 0 };
             const p = game.players.find((x) => x.id === pid);
             const name = p ? esc(p.name) : "—";
-            const val = def.cellValue(cell);
+            const val = def.cellValue(cell, game);
             running[pid] = (running[pid] || 0) + val;
             const drawnTag =
               val === 0 ? '<span class="draw-tag">Pioche</span>' : "";

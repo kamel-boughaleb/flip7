@@ -167,6 +167,7 @@ function celebrate(game) {
         mode: game.mode,
         target: game.target,
         yamsChance: game.yamsChance,
+        brutalMode: game.brutalMode,
         teams: game.players, // Time's Up!: carry over teams + their players
         restartOf: game.id, // link the replay so other devices can offer to join
       });

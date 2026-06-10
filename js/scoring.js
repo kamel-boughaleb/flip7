@@ -16,7 +16,7 @@ import {
 function playerTotal(game, playerId) {
   const def = defFor(game);
   const base = game.rounds.reduce(
-    (sum, r) => sum + def.cellValue(r.scores[playerId]),
+    (sum, r) => sum + def.cellValue(r.scores[playerId], game),
     0,
   );
   // Some games (Yams) add an aggregate bonus on top of the per-cell sum.

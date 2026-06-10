@@ -282,6 +282,10 @@ function startStatsPolling(immediate) {
 function startPolling(id, immediate) {
   stopPolling();
   if (!db) return; // nothing to sync from in local mode
+  // A replay that ALREADY exists when we land on this game isn't news: mark it
+  // known so the banner only fires for a replay created live while we watch —
+  // not every time we revisit an old, already-replayed game.
+  if (replayOf(id)) replayNotified.add(id);
   const onScoreScreen = () => currentRoute().name === "game" || currentRoute().name === "details";
   const tick = async () => {
     if (!onScoreScreen() || currentRoute().id !== id) return stopPolling();
@@ -753,6 +757,9 @@ function renderGame(id) {
       app.appendChild(wrapPanel(buildBombuContractInfo(game)));
     const summary = document.createElement("app-score-summary");
     summary.game = game;
+    // Swipe-to-eliminate writes the round draft → re-render the game screen
+    // (refreshes the scoreboard preview and the "Reprendre la saisie" button).
+    summary.addEventListener("draftchanged", () => renderGame(id));
     app.appendChild(wrapPanel(summary));
     // Hide score entry once the game is won.
     if (!w) {
@@ -789,6 +796,7 @@ function renderGame(id) {
         mode: game.mode,
         target: game.target,
         yamsChance: game.yamsChance,
+        brutalMode: game.brutalMode,
         teams: game.players, // Time's Up!: carry over teams + their players
         restartOf: game.id, // link the replay so other devices can offer to join
       }),

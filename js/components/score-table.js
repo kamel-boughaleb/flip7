@@ -5,7 +5,7 @@
    "changed" event (carrying the prior winner id on score edits) so the details
    screen refreshes and celebrates a new win. */
 import { el, esc } from "../util.js";
-import { defFor, unitLabel } from "../rules.js";
+import { defFor, unitLabel, brutalEnabled } from "../rules.js";
 import { standings, winner, winners, rankLabels } from "../scoring.js";
 import { getGame, upsertGame } from "../store.js";
 import { confirmDialog } from "../ui.js";
@@ -44,6 +44,7 @@ class AppScoreTable extends HTMLElement {
     if (!game) return;
     const def = defFor(game);
     const isFlip7Game = def.entry === "flip7";
+    const brutal = brutalEnabled(game); // Vengeance: negatives + scorable eliminated + Flip 7 redirect
     const hasRounds = game.rounds.length > 0;
     const winIds = new Set(winners(game).map((p) => p.id));
     const st = standings(game);
@@ -75,10 +76,19 @@ class AppScoreTable extends HTMLElement {
       game.rounds.forEach((r, ri) => {
         const cell = r.scores[p.id] || { points: 0, flip7: false, bust: false };
         const td = el(`<td></td>`);
-        const pts = cell.bust ? 0 : Number(cell.points) || 0;
+        // Eliminated: 0 outside Brutal; in Brutal the kept total is a negative
+        // malus (an eliminated player can never gain points).
+        const pts = cell.bust
+          ? brutal
+            ? -Math.abs(Number(cell.points) || 0)
+            : 0
+          : Number(cell.points) || 0;
         if (isFlip7Game) {
-          const flip7 = !cell.bust && !!cell.flip7;
-          td.innerHTML = `<span class="cell-box"><input type="text" class="cell-input${pts === 0 && !flip7 ? " cell-zero" : ""}" value="${esc(String(pts))}" />${flip7 ? '<span class="flip7-tag">+15</span>' : ""}</span>`;
+          // The +15 badge reflects only a bonus kept by its author: a Brutal
+          // Flip 7 redirected to an opponent (flip7To) keeps flip7 but no badge.
+          const ownFlip7 =
+            (brutal || !cell.bust) && !!cell.flip7 && !cell.flip7To;
+          td.innerHTML = `<span class="cell-box"><input type="text" class="cell-input${pts === 0 && !ownFlip7 ? " cell-zero" : ""}" value="${esc(String(pts))}" />${ownFlip7 ? '<span class="flip7-tag">+15</span>' : ""}</span>`;
           const input = td.querySelector("input");
           const box = td.querySelector(".cell-box");
           const setBadge = (on) => {
@@ -101,13 +111,14 @@ class AppScoreTable extends HTMLElement {
           });
           const restoreDisplay = () => {
             input.value = String(pts);
-            setBadge(flip7);
-            input.classList.toggle("cell-zero", pts === 0 && !flip7);
+            setBadge(ownFlip7);
+            input.classList.toggle("cell-zero", pts === 0 && !ownFlip7);
           };
           input.addEventListener("blur", () => {
             const { points, flip7: f } = parseFlip7Input(input.value);
-            const bustCleared = cell.bust && (points !== 0 || f);
-            if (points === pts && f === flip7 && !bustCleared) {
+            // Editing never un-eliminates a Brutal player (their score is real).
+            const bustCleared = !brutal && cell.bust && (points !== 0 || f);
+            if (points === pts && f === ownFlip7 && !bustCleared) {
               restoreDisplay();
               return;
             }
@@ -119,7 +130,12 @@ class AppScoreTable extends HTMLElement {
               bust: false,
             };
             c.points = points;
-            c.flip7 = f;
+            // Only touch the bonus when the badge state changed, so an untouched
+            // Brutal redirect (flip7 + flip7To, shown badge-less) is preserved.
+            if (f !== ownFlip7) {
+              c.flip7 = f;
+              if (c.flip7To) delete c.flip7To; // editing the badge cancels a redirect
+            }
             if (bustCleared) c.bust = false;
             g.rounds[ri].scores[p.id] = c;
             upsertGame(g);

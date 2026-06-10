@@ -1622,6 +1622,8 @@ table.score.summary-table .total-cell {
   gap: 1rem 0.5rem;
   font-weight: 800;
   white-space: nowrap;
+  line-height: 1;
+  vertical-align: middle; /* align with the (smaller) preview pill beside it */
 }
 /* projected total from an in-progress (pre-saved) round */
 .score-preview {
@@ -1635,12 +1637,14 @@ table.score.summary-table .total-cell {
   color: var(--teal-dark, var(--text));
   font-size: 0.9rem;
   font-weight: 800;
+  line-height: 1;
   white-space: nowrap;
   vertical-align: middle;
 }
-.score-preview .fa-arrow-right-long {
-  opacity: 0.6;
-  font-size: 0.8em;
+/* projected total lower than the current one (a net loss) */
+.score-preview.is-loss {
+  background: rgba(239, 108, 74, 0.16);
+  color: var(--coral-dark);
 }
 /* the in-progress round's points, shown in () after the projected total */
 .score-preview-delta {
@@ -1687,6 +1691,86 @@ table.score .eliminated-row .player-name {
   display: inline-block;
   color: var(--gold-dark);
   animation: crown-bounce 1.5s infinite;
+}
+
+/* ---------- score-summary list (swipe-to-eliminate) ----------
+   The game scoreboard is a div list (not a table) so each row can be swiped
+   left to toggle a player's elimination for the in-progress round. */
+.table-wrap.summary-list {
+  padding: 0;
+  overflow: hidden; /* clip rows to the card's rounded corners */
+}
+.summary-row {
+  position: relative;
+  overflow: hidden; /* hide the foreground as it slides past the edge */
+}
+.summary-row + .summary-row {
+  border-top: 1px solid rgba(43, 168, 162, 0.12);
+}
+.summary-row-fg {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 0.75rem;
+  background: var(--card);
+  touch-action: pan-y; /* keep vertical scroll; we claim horizontal swipes */
+}
+.summary-row .rank-col {
+  width: auto;
+  padding: 0;
+}
+.summary-row .player-name {
+  text-align: left;
+  font-weight: 800;
+  color: var(--teal-dark);
+  min-width: 0;
+}
+.summary-row .total-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  font-size: 1.5rem;
+}
+/* eliminated row: red tint kept opaque (gradient over card) so the swipe
+   action behind never shows through at rest */
+.summary-row.eliminated-row .summary-row-fg {
+  background:
+    linear-gradient(
+      0deg,
+      rgba(239, 108, 74, 0.16),
+      rgba(239, 108, 74, 0.16)
+    ),
+    var(--card);
+}
+.summary-row.eliminated-row .player-name {
+  color: var(--coral-dark);
+  text-decoration: line-through;
+  text-decoration-color: rgba(212, 82, 51, 0.5);
+}
+/* swipe action revealed behind the foreground */
+.summary-row-action {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 1.5rem;
+  font-size: 1.2rem;
+  color: #fff;
+}
+.summary-row-action.is-eliminate {
+  background: var(--coral);
+}
+.summary-row-action.is-restore {
+  background: var(--skyjo);
+}
+.summary-row.will-trigger .summary-row-action {
+  font-size: 1.5rem; /* subtle grow once past the trigger threshold */
 }
 
 tfoot td {
@@ -1961,6 +2045,7 @@ tfoot td .btn-icon {
   gap: 1rem 0.5rem;
 }
 .entry-player {
+  position: relative; /* anchors the Brutal Flip 7 +15/−15 effect badge */
   display: flex;
   align-items: center;
   gap: 1rem 0.5rem;
@@ -2056,6 +2141,40 @@ tfoot td .btn-icon {
 }
 .entry-player.flipped .pname {
   color: var(--sky);
+}
+/* Brutal (Vengeance): top-right badge on a score-entry row showing the +15/−15
+   that player receives this round (their own kept Flip 7, or one redirected to
+   them by an opponent). */
+.flip7-effect-badge {
+  position: absolute;
+  top: -9px;
+  right: 8px;
+  min-width: 2rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-weight: 900;
+  font-size: 0.85rem;
+  text-align: center;
+  color: #fff;
+  border: 2px solid var(--card, #fff);
+  box-shadow: var(--shadow-sm);
+  z-index: 2;
+}
+.flip7-effect-badge.is-plus {
+  background: var(--sky);
+}
+.flip7-effect-badge.is-minus {
+  background: var(--coral);
+}
+.flip7-effect-badge[hidden] {
+  display: none;
+}
+/* +15 / −15 badges in the Flip 7 destination dialog */
+.yams-fixed.f7-plus {
+  color: var(--sky);
+}
+.yams-fixed.f7-minus {
+  color: var(--coral-dark);
 }
 
 /* ×2 doubling toggle (Skyjo) — green like the Skyjo accent */
