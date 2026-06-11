@@ -226,7 +226,7 @@ function render() {
   if (name === "entry") return renderEntry(r.id);
   if (name === "game") {
     renderGame(r.id);
-    startPolling(r.id); // live-refresh the board every 2s
+    startPolling(r.id); // live-refresh the board every 1s
     return;
   }
   if (name === "details") {
@@ -325,7 +325,7 @@ function startPolling(id, immediate) {
     }
   };
   if (immediate) tick();
-  pollTimer = setInterval(tick, 2000);
+  pollTimer = setInterval(tick, 1000); // board: snappier sync during a live game
 }
 
 // Players currently busted in a game's in-progress draft.
