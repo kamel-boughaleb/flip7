@@ -84,6 +84,7 @@ import {
   currentHashPath,
   replaceRoute,
 } from "./js/nav.js";
+import { keepScreenAwake, allowScreenSleep } from "./js/wakelock.js";
 import {
   db,
   LOADED_PLACE,
@@ -207,6 +208,9 @@ function render() {
   document.getElementById("replay-banner")?.remove(); // drop it on navigation
   const r = currentRoute();
   const name = KNOWN_ROUTES.includes(r.name) ? r.name : "home";
+  // Keep the device awake while a game is on screen; let it sleep elsewhere.
+  if (name === "game" || name === "details") keepScreenAwake();
+  else allowScreenSleep();
   updatePlaceBtn();
   if (name === "place") return renderPlace();
   if (name === "home") {
