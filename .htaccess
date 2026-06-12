@@ -1,20 +1,37 @@
-# Ce projet a déménagé vers https://kigagne.click
+# === Redirection de l'ancien domaine ===
+# flip7.click a déménagé vers kigagne.click. Redirection 301 (permanente) ciblée
+# UNIQUEMENT sur ce host : kigagne.click et localhost/MAMP ne sont pas concernés
+# (aucune boucle, dev local intact). Doublée par une redirection JS dans
+# index.html, car le serveur de flip7.click n'honore peut-être pas ce .htaccess
+# (AllowOverride None) — l'app routant par hash, le .htaccess n'y est pas requis.
 #
-# Redirection 301 (permanente) de TOUTES les URLs vers le nouveau domaine, en
-# préservant le chemin (ex: /[lieu]/stats → https://kigagne.click/[lieu]/stats).
-# Le 301 indique aux navigateurs et moteurs de recherche que le déplacement est
-# définitif : le référencement (SEO) est transféré vers kigagne.click.
-#
-# La condition sur HTTP_HOST évite toute boucle de redirection si kigagne.click
-# venait à être servi par ce même dossier.
+# === Routing SPA + cache (kigagne.click / local) ===
+# Sert les vrais fichiers/dossiers ; route le reste vers index.html. Pas de
+# RewriteBase : "index.html" se résout dans le dossier du .htaccess, donc le même
+# fichier marche à la racine (prod) et en sous-dossier /flip7/ (MAMP).
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteCond %{HTTP_HOST} !^kigagne\.click$ [NC]
+
+  # Ancien domaine → kigagne.click (préserve le chemin ; le hash est géré en JS).
+  RewriteCond %{HTTP_HOST} ^(www\.)?flip7\.click$ [NC]
   RewriteRule ^(.*)$ https://kigagne.click/$1 [R=301,L]
+
+  # Routing SPA : fichiers/dossiers réels servis tels quels, sinon index.html.
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+  RewriteRule ^ index.html [L]
 </IfModule>
 
-# Repli si mod_rewrite est indisponible : Redirect préserve aussi le chemin
-# restant (ex: /stats → https://kigagne.click/stats).
-<IfModule !mod_rewrite.c>
-  Redirect 301 / https://kigagne.click/
+# Repli quand mod_rewrite est indisponible mais le .htaccess est honoré : sert
+# l'entrée SPA pour tout chemin inconnu. Statut 404 mais l'app démarre et route.
+ErrorDocument 404 /index.html
+
+# Toujours revalider le code de l'app : les <meta> HTML ne couvrent pas les
+# modules ES importés statiquement, donc sans ceci le navigateur sert des js/css
+# périmés. no-store garde chaque chargement frais.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|mjs|css)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+  </FilesMatch>
 </IfModule>
