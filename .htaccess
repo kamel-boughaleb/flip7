@@ -1,30 +1,20 @@
-# Path-based routing (History API) — Apache/MAMP production.
-# Serve real files/directories as-is; route everything else to index.html so
-# deep links like /[lieu]/stats or /[lieu]/[id]/details work on refresh/share.
-# No RewriteBase: the relative "index.html" target resolves against the folder
-# that holds this .htaccess — so the same file works at the domain root (prod)
-# and in a subfolder like /flip7/ (MAMP), no per-environment edit needed.
+# Ce projet a déménagé vers https://kigagne.click
+#
+# Redirection 301 (permanente) de TOUTES les URLs vers le nouveau domaine, en
+# préservant le chemin (ex: /[lieu]/stats → https://kigagne.click/[lieu]/stats).
+# Le 301 indique aux navigateurs et moteurs de recherche que le déplacement est
+# définitif : le référencement (SEO) est transféré vers kigagne.click.
+#
+# La condition sur HTTP_HOST évite toute boucle de redirection si kigagne.click
+# venait à être servi par ce même dossier.
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteCond %{REQUEST_FILENAME} -f [OR]
-  RewriteCond %{REQUEST_FILENAME} -d
-  RewriteRule ^ - [L]
-  RewriteRule ^ index.html [L]
+  RewriteCond %{HTTP_HOST} !^kigagne\.click$ [NC]
+  RewriteRule ^(.*)$ https://kigagne.click/$1 [R=301,L]
 </IfModule>
 
-# Fallback when mod_rewrite is unavailable but .htaccess is honored: serve the
-# SPA entry for any unknown path. Same override class (FileInfo) as the rewrite
-# above, so it never triggers a 500 the rewrite wouldn't. The response status is
-# 404 but the app boots and routes from location.pathname.
-ErrorDocument 404 /index.html
-
-# Always revalidate the app code. The HTML <meta> cache hints don't cover the
-# statically-imported ES modules, so without this the browser keeps serving
-# stale js/css (e.g. an old stats.js missing a new filter → fallback to the
-# wrong data). no-store keeps every load fresh.
-<IfModule mod_headers.c>
-  <FilesMatch "\.(js|mjs|css)$">
-    Header set Cache-Control "no-cache, no-store, must-revalidate"
-  </FilesMatch>
+# Repli si mod_rewrite est indisponible : Redirect préserve aussi le chemin
+# restant (ex: /stats → https://kigagne.click/stats).
+<IfModule !mod_rewrite.c>
+  Redirect 301 / https://kigagne.click/
 </IfModule>
-
