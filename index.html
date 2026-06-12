@@ -2,6 +2,27 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
+    <!-- REDIRECTION ANCIEN DOMAINE — flip7.click a déménagé vers kigagne.click.
+         Exécutée côté client, en tout premier (avant tout asset/app), car le
+         serveur de flip7.click n'honore pas le .htaccess (l'app route par hash,
+         donc aucune réécriture serveur n'est requise). Ciblée sur le seul ancien
+         host : kigagne.click, localhost et MAMP ne sont pas touchés (pas de
+         boucle, dev local intact). On conserve chemin + recherche + hash
+         (#/[lieu]/…) pour que les liens déjà partagés continuent de marcher.
+         replace() n'ajoute pas flip7.click à l'historique de navigation. -->
+    <script>
+      (function () {
+        var h = location.hostname;
+        if (h === "flip7.click" || h === "www.flip7.click") {
+          location.replace(
+            "https://kigagne.click" +
+              location.pathname +
+              location.search +
+              location.hash
+          );
+        }
+      })();
+    </script>
     <!-- DEPLOY BASE (path-based routing) — injecté AVANT tout asset pour que les
          URLs relatives (CSS, modules, fonts) se résolvent quelle que soit la
          profondeur de l'URL. Auto-détecté depuis le chemin : "/flip7/" si servi
